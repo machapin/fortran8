@@ -2,22 +2,22 @@ module smac
     implicit none
     ! gfortran fenep.f90 -I$HOME/local/include -L$HOME/local/lib -lfftw3 && ./a.out
     ! ステップ数
-    integer, parameter :: Nstep = 10
+    integer, parameter :: Nstep = 100
     integer, parameter :: Gstep = 1000  ! データを取得する間隔
     integer, parameter :: Estep = 1000  ! エネルギースペクトルを取得する間隔
-    integer, parameter :: Dstep = 1  ! デバッグする間隔
-    character(*), parameter :: dir = './ibm/'
+    integer, parameter :: Dstep = 10  ! デバッグする間隔
+    character(*), parameter :: dir = './debug/'
     integer, parameter :: input_step = 0  ! 0以外で初期条件をファイルから読み込む
-    integer, parameter :: output_step = 5000  ! 配列を保存する間隔
+    integer, parameter :: output_step = 100000  ! 配列を保存する間隔
     ! 手法
     integer, parameter :: method = 1  ! 0:陽解法、1:FFT、2:IBM
     real(8), parameter :: PI = acos(-1.0d0)
     ! パラメータ
-    integer, parameter :: NX = 128, NY = NX, NZ = NX
+    integer, parameter :: NX = 128, NY = NX, NZ = 2
     real(8), parameter :: dX = 2*PI/NX, dY = 2*PI/NY, dZ = 2*PI/NZ
     real(8), parameter :: dt = 0.01d0
     ! 無次元パラメータ
-    real(8), parameter :: Re_s = 5000.0d0
+    real(8), parameter :: Re_s = 1.0d0
     real(8), parameter :: beta = 0.9d0
     real(8), parameter :: Re = Re_s*beta
     real(8), parameter :: Wi = 1.0d0
@@ -92,15 +92,15 @@ contains
         Fz(:, :, :) = f0 * Fz(:, :, :)
 
         call random_number(C)
-        ! C(:, :, :, :) = 0.001d0 * (C(:, :, :, :)-0.5d0)
-        ! C(1, :, :, :) = C(1, :, :, :) + 1.0d0
-        ! C(4, :, :, :) = C(4, :, :, :) + 1.0d0
-        ! C(6, :, :, :) = C(6, :, :, :) + 1.0d0
+        C(:, :, :, :) = 0.001d0 * (C(:, :, :, :)-0.5d0)
+        C(1, :, :, :) = C(1, :, :, :) + 1.0d0
+        C(4, :, :, :) = C(4, :, :, :) + 1.0d0
+        C(6, :, :, :) = C(6, :, :, :) + 1.0d0
 
-        C(:, :, :, :) = 0.1d0
-        C(1, :, :, :) = 1.0d0
-        C(4, :, :, :) = 1.1d0
-        C(6, :, :, :) = 1.2d0
+        ! C(:, :, :, :) = 0.0d0
+        ! C(1, :, :, :) = 1.2d0
+        ! C(4, :, :, :) = 1.1d0
+        ! C(6, :, :, :) = 1.0d0
 
         call PBM(U)
         call PBM(V)
@@ -916,7 +916,6 @@ contains
         real(8) D(3, 3), omega, sendan, Qti, trC
         character(8) str
         write(str, '(I8.8)') step  ! 数値を文字列に変換
-        call mk_dir(dir)
         open(10, file=dir//'z_'//str//'.d')
 
         k = NZ/2
@@ -957,7 +956,6 @@ contains
         real(8) D(3, 3), Omega(3), S(3), Qti, trC
         character(8) str
         write(str, '(I8.8)') step  ! 数値を文字列に変換
-        call mk_dir(dir)
         open(10, file=dir//'y_'//str//'.d')
 
         j = NY/2
@@ -1072,12 +1070,12 @@ contains
             K_energy = K_energy*U_C**2/2
             K_energy = K_energy/(NX*NY*NZ)
             write(*, '(a, e12.4)', advance='no') '  | K_energy:', K_energy
-            ! write(*, '(a, F6.3)', advance='no') '  | index 0:', counter(0)*1.0d0/(3*NX*NY*NZ)
-            ! write(*, '(a, F6.3)', advance='no') '  1:', counter(1)*1.0d0/(3*NX*NY*NZ)
-            ! write(*, '(a, F6.3)', advance='no') '  2:', counter(2)*1.0d0/(3*NX*NY*NZ)
-            ! write(*, '(a, F6.3)', advance='no') '  3:', counter(3)*1.0d0/(3*NX*NY*NZ)
 
-            write(*, '(a, F6.2)', advance='no') '  | newton_itr:', newton_itr*1.0d0/(NX*NY*NZ)
+            write(*, '(a, F6.3)', advance='no') '  | index 0:', counter(0)*1.0d0/sum(counter)
+            write(*, '(a, F6.3)', advance='no') '  1:', counter(1)*1.0d0/sum(counter)
+            write(*, '(a, F6.3)', advance='no') '  2:', counter(2)*1.0d0/sum(counter)
+            write(*, '(a, F6.3)', advance='no') '  3:', counter(3)*1.0d0/sum(counter)
+            ! write(*, '(a, F6.2)', advance='no') '  | newton_itr:', newton_itr*1.0d0/(NX*NY*NZ)
             ! write(*, '(a, I5)', advance='no') '  | poisson_itr:', poisson_itr
 
             trC(:, :, :) = C(1, 1:NX, 1:NY, 1:NZ)+C(4, 1:NX, 1:NY, 1:NZ)+C(6, 1:NX, 1:NY, 1:NZ)
@@ -1100,9 +1098,9 @@ contains
             enddo
             write(*, '(a, F7.3)', advance='no') '  | SPD:', count*1.0d0/(NX*NY*NZ)
 
-            write(*, '(a, e12.4)', advance='no') '  | Re_lamda:', Re_lamda
-            write(*, '(a, e12.4)', advance='no') '  | epsilon:', epsilon
-            write(*, '(a, e12.4)', advance='no') '  | eta:', eta
+            ! write(*, '(a, e12.4)', advance='no') '  | Re_lamda:', Re_lamda
+            ! write(*, '(a, e12.4)', advance='no') '  | epsilon:', epsilon
+            ! write(*, '(a, e12.4)', advance='no') '  | eta:', eta
 
             call cpu_time(t_temp)
             t_pre = int((t_temp-t_start)*(Nstep-step)/step)
@@ -1151,7 +1149,6 @@ contains
         integer i, j, k
         character(8) str
         write(str, '(I8.8)') step  ! 数値を文字列に変換
-        call mk_dir(dir)
         open(10, file=dir//str//'.d')
 
         do k = 1, NZ
@@ -1241,9 +1238,9 @@ contains
         do k = 1, NZ
             do j = 1, NY
                 do i = 1, NX
-                    LHS(i, j, k) = 1 + dt*beta/Re/2.0d0*(2*(1-cos((i-1)*dX))/dX**2 &
-                                                       + 2*(1-cos((j-1)*dY))/dY**2 &
-                                                       + 2*(1-cos((k-1)*dZ))/dZ**2)
+                    LHS(i, j, k) = 1.0d0 + dt*beta/Re/2.0d0*(2*(1-cos((i-1)*dX))/dX**2 &
+                                                           + 2*(1-cos((j-1)*dY))/dY**2 &
+                                                           + 2*(1-cos((k-1)*dZ))/dZ**2)
                 enddo
             enddo
         enddo
@@ -1872,6 +1869,7 @@ program main
     real(8) total_time, t_start, t_end, others_time
     ! real(8) Ep(1:NX, 1:NY, 1:NZ)
     ! integer i, j, k
+    call mk_dir(dir)
     call cpu_time(t_start)
     t12 = 0.0d0
     t23 = 0.0d0
@@ -1880,8 +1878,8 @@ program main
 
     call init(U, V, W, P, Phi, C, Fx, Fy, Fz)
     if (input_step > 0) call input(U, V, W, P, C)
-    if (mod(method, 10) == 2) call ibm_init(X, Y, Z, Xc, Yc, Zc, Uc, Vc, Wc)
-    if (mod(method, 10) == 2) call ibm_get(Xc, Yc) 
+    if (method == 2) call ibm_init(X, Y, Z, Xc, Yc, Zc, Uc, Vc, Wc)
+    if (method == 2) call ibm_get(Xc, Yc) 
     ! call get_data(U, V, W, 0)
     ! call get_data_xy(U, V, W, C, 0)
     ! call get_data_xz(U, V, W, C, 50000)
@@ -1895,8 +1893,8 @@ program main
     ! write(*, *) sum(Ep)/(NX*NY*NZ)
     
     do step = 1, Nstep
-        eigen_method = 1
-        if (mod(step, 100)==0) eigen_method = 0  ! 0:カルダノ、1:シルベスター
+        eigen_method = 0
+        ! if (mod(step, 100)==0) eigen_method = 0  ! 0:カルダノ、1:シルベスター
         call cpu_time(t1)
         call CpxCnx(C, Cpx, Cnx)
         call CpyCny(C, Cpy, Cny)
@@ -1911,7 +1909,7 @@ program main
         call convection(U, V, W, Ax, Ay, Az)
         call viscous(U, V, W, Bx, By, Bz)
 
-        if (mod(method, 10) == 0) then
+        if (method == 0) then
             call navier(U, V, W, P, Up, Vp, Wp, Ax, Ay, Az, Ax0, Ay0, Az0, &
                         Bx, By, Bz, Bx0, By0, Bz0, Tx, Ty, Tz, Tx0, Ty0, Tz0, Fx, Fy, Fz, step)
             call cpu_time(t4)
@@ -1919,7 +1917,7 @@ program main
             call march(Up, Vp, Wp, U, V, W, Phi, P)
         endif
 
-        if (mod(method, 10) == 1) then
+        if (method == 1) then
             call fft_navier(U, V, W, P, Up, Vp, Wp, Ax, Ay, Az, Ax0, Ay0, Az0, &
                             Bx, By, Bz, Tx, Ty, Tz, Tx0, Ty0, Tz0, Fx, Fy, Fz, step)
             call cpu_time(t4)
@@ -1927,7 +1925,7 @@ program main
             call fft_march(Up, Vp, Wp, U, V, W, Phi, P)
         endif
 
-        if (mod(method, 10) == 2) then
+        if (method == 2) then
             call ibm_preliminary(U, V, W, P, Ax, Ay, Az, Ax0, Ay0, Az0, Bx, By, Bz, Tx, Ty, Tz, Tx0, Ty0, Tz0, &
                                  Ua, Va, Wa, Fxc, Fyc, Fzc, Up, Vp, Wp, step)
             do s = 1, NS
@@ -1959,6 +1957,7 @@ program main
         t23 = t23 + t3-t2
         t34 = t34 + t4-t3
         t45 = t45 + t5-t4
+        ! write(*, '(12e12.4)') U(1:12, 1, 1)
     enddo
 
     call cpu_time(t_end)

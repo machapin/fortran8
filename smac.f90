@@ -500,7 +500,6 @@ contains
         real(8) D(3, 3), Omega(3), S(3), Qti
         character(8) str
         write(str, '(I8.8)') step  ! 数値を文字列に変換
-        call mk_dir(dir)
         ! open(10, file='data/y_'//str//'.d')
         open(10, file=dir//'y_'//str//'.d')
 
@@ -659,7 +658,6 @@ contains
         integer i, j, k
         character(8) str
         write(str, '(I8.8)') step  ! 数値を文字列に変換
-        call mk_dir(dir)
         open(10, file=dir//str//'.d')
 
         do k = 1, NZ
@@ -770,10 +768,10 @@ contains
         do k = 1, NZ
             do j = 1, NY
                 do i = 1, NX
-                    ! LHS(i, j, k) = 1 + dt/Re/2.0d0*(2*(1-cos((i-1)*dX*2*PI))/dX**2 &
+                    ! LHS(i, j, k) = 1.0d0 + dt/Re/2.0d0*(2*(1-cos((i-1)*dX*2*PI))/dX**2 &
                     !                               + 2*(1-cos((j-1)*dY*2*PI))/dY**2 &
                     !                               + 2*(1-cos((k-1)*dZ*2*PI))/dZ**2)
-                    LHS(i, j, k) = 1 + dt/Re/2.0d0*(2*(1-cos((i-1)*dX))/dX**2 &
+                    LHS(i, j, k) = 1.0d0 + dt/Re/2.0d0*(2*(1-cos((i-1)*dX))/dX**2 &
                                                   + 2*(1-cos((j-1)*dY))/dY**2 &
                                                   + 2*(1-cos((k-1)*dZ))/dZ**2)
                 enddo

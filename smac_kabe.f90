@@ -467,7 +467,6 @@ contains
         real(8) D(3, 3), Omega(3), S(3), Qti
         character(8) str
         write(str, '(I8.8)') step  ! 数値を文字列に変換
-        call mk_dir(dir)
         ! open(10, file='data/y_'//str//'.d')
         open(10, file=dir//'y_'//str//'.d')
 
@@ -529,7 +528,6 @@ contains
         integer i, j, k
         character(8) str
         write(str, '(I8.8)') step  ! 数値を文字列に変換
-        call mk_dir(dir)
         open(10, file=dir//str//'.d')
 
         do k = 1, NZ
@@ -1721,6 +1719,7 @@ program main
     real(8) Energy(0:NX)
     integer step, i, j, k, s
     real(8) t_start, t_end, total_time, t1, t2, t12
+    call mk_dir(dir)
     call cpu_time(t_start)
     t12 = 0.0d0
 

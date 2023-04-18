@@ -1503,7 +1503,6 @@ contains
         call MPI_Gather(C_procs(1, 0, 0, 1), 6*(NX+2)*(NY+2)*N_procs, MPI_REAL8, C(1, 0, 0, 1), 6*(NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
 
         if (myrank == 0) then
-            call mk_dir(dir)
             open(10, file=dir//str//'.d')
             do k = 1, NZ
                 do j = 1, NY
@@ -1687,10 +1686,10 @@ contains
         do k = 1, NZ
             do j = 1, NY_procs
                 do i = 1, NX/2+1
-                    ! LHS_procs(i, j, k) = 1 + dt*beta/Re/2.0d0*(2*(1-cos((i-1)*dX*2*PI))/dX**2 &
+                    ! LHS_procs(i, j, k) = 1.0d0 + dt*beta/Re/2.0d0*(2*(1-cos((i-1)*dX*2*PI))/dX**2 &
                     !                                          + 2*(1-cos((myrank*NY_procs + j-1)*dY*2*PI))/dY**2 &
                     !                                          + 2*(1-cos((k-1)*dZ*2*PI))/dZ**2)
-                    LHS_procs(i, j, k) = 1 + dt*beta/Re/2.0d0*(2*(1-cos((i-1)*dX))/dX**2 &
+                    LHS_procs(i, j, k) = 1.0d0 + dt*beta/Re/2.0d0*(2*(1-cos((i-1)*dX))/dX**2 &
                                                              + 2*(1-cos((myrank*NY_procs + j-1)*dY))/dY**2 &
                                                              + 2*(1-cos((k-1)*dZ))/dZ**2)
                 enddo
@@ -1965,7 +1964,6 @@ contains
         Energy(:) = Energy(:)/Estep
 
         if (myrank == 0) then
-            call mk_dir(dir)
             open(30, file = dir//'energy_'//str//'.d')
             do i = 0, NX
                 write(30, '(I4, e12.4)') i, Energy(i)
@@ -2433,6 +2431,7 @@ program main
     integer step
     real(8) time1, time2
     Energy(:) = 0.0d0
+    call mk_dir(dir)
 
     call MPI_Init(ierr)
     call MPI_Comm_Size(MPI_COMM_WORLD, procs, ierr)
