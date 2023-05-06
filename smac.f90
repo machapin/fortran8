@@ -6,11 +6,11 @@ module smac
     integer, parameter :: Gstep = 10000  ! データを取得する間隔
     integer, parameter :: Estep = 10000  ! エネルギースペクトルを取得する間隔
     integer, parameter :: Dstep = 10  ! デバッグする間隔
-    character(*), parameter :: dir = './ibm_C/'
+    character(*), parameter :: dir = './ibm_old/'
     integer, parameter :: input_step = 0  ! 0以外で初期条件をファイルから読み込む
     integer, parameter :: output_step = 5000  ! 配列を保存する間隔
     ! 手法
-    integer, parameter :: method = 1  ! 0:陽解法、1:FFT、2:IBM，3:時間平均エネルギーカスケード
+    integer, parameter :: method = 2  ! 0:陽解法、1:FFT、2:IBM，3:時間平均エネルギーカスケード
     real(8), parameter :: PI = acos(-1.0d0)
     ! パラメータ
     integer, parameter :: NX = 128, NY = NX, NZ = NX
@@ -1167,8 +1167,11 @@ contains
             enddo
         endif
         do k = 1, NZ
-            Zc(:, :, k) = (k-0.5d0)*dZ
+            Zc(:, :, k) = (k-0.25d0)*dZ
         enddo
+        Xc(:, :, :) = Xc(:, :, :) + 10d-10*dX  ! 速度定義点から少しずらして外力点を定義
+        Yc(:, :, :) = Yc(:, :, :) + 10d-10*dY
+        Zc(:, :, :) = Zc(:, :, :) + 10d-10*dZ
 
         ! 円柱上の座標での速度
         Uc(:, :, :) = 0.0d0

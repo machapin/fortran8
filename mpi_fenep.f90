@@ -2055,8 +2055,11 @@ contains
             enddo
         endif
         do k = 1, N_procs
-            Zc_procs(:, :, k) = (myrank*N_procs + k-0.5d0)*dZ
+            Zc_procs(:, :, k) = (myrank*N_procs + k-0.25d0)*dZ
         enddo
+        Xc_procs(:, :, :) = Xc_procs(:, :, :) + 10d-10*dX
+        Yc_procs(:, :, :) = Yc_procs(:, :, :) + 10d-10*dY
+        Zc_procs(:, :, :) = Zc_procs(:, :, :) + 10d-10*dZ
 
         ! 円柱上の座標での速度
         Uc_procs(:, :, :) = 0.0d0

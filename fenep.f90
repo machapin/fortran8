@@ -2,7 +2,7 @@ module smac
     implicit none
     ! gfortran fenep.f90 -I$HOME/local/include -L$HOME/local/lib -lfftw3 && ./a.out
     ! ステップ数
-    integer, parameter :: Nstep = 100
+    integer, parameter :: Nstep = 1
     integer, parameter :: Gstep = 1000  ! データを取得する間隔
     integer, parameter :: Estep = 1000  ! エネルギースペクトルを取得する間隔
     integer, parameter :: Dstep = 10  ! デバッグする間隔
@@ -10,10 +10,10 @@ module smac
     integer, parameter :: input_step = 0  ! 0以外で初期条件をファイルから読み込む
     integer, parameter :: output_step = 100000  ! 配列を保存する間隔
     ! 手法
-    integer, parameter :: method = 1  ! 0:陽解法、1:FFT、2:IBM
+    integer, parameter :: method = 2  ! 0:陽解法、1:FFT、2:IBM
     real(8), parameter :: PI = acos(-1.0d0)
     ! パラメータ
-    integer, parameter :: NX = 128, NY = NX, NZ = 2
+    integer, parameter :: NX = 32, NY = NX, NZ = NX
     real(8), parameter :: dX = 2*PI/NX, dY = 2*PI/NY, dZ = 2*PI/NZ
     real(8), parameter :: dt = 0.01d0
     ! 無次元パラメータ
@@ -33,6 +33,11 @@ module smac
     integer eigen_method  ! 固有値の求め方
     real(8) counter(0:3), newton_itr
     integer poisson_itr
+    ! LAPACK用変数
+    ! integer, parameter :: N = 3
+    ! integer :: info
+    ! real(8) :: A(N, N), w0(N), work(3*N-1)
+    ! integer :: lwork = 3*N-1
 
 
 contains
@@ -281,9 +286,12 @@ contains
         ! write(*, *) t
 
         if (t > 0.0d0) then  ! 対称行列の固有値は全て実数で、tは必ず負になるので、このifを満たすものはない。
-            u3 = -q/2 + cmplx(sqrt(t), 0.0d0, kind=8)
-            v3 = -q/2 - cmplx(sqrt(t), 0.0d0, kind=8)
-            stop 'complex eigenvalues'
+            ! u3 = -q/2 + cmplx(sqrt(t), 0.0d0, kind=8)
+            ! v3 = -q/2 - cmplx(sqrt(t), 0.0d0, kind=8)
+            ! stop 'complex eigenvalues'
+            re0 = -1.0d0  ! 選ばれないようにする
+            re1 = -1.0d0
+            re2 = -1.0d0
         else
             u3 = -q/2 + cmplx(0.0d0, sqrt(-t), kind=8) ! t=0のときは解に虚数を含むが、倍精度の足し引きをするので、0はありえない。
             v3 = -q/2 - cmplx(0.0d0, sqrt(-t), kind=8)
@@ -1546,8 +1554,11 @@ contains
             enddo
         endif
         do k = 1, NZ
-            Zc(:, :, k) = (k-0.5d0)*dZ
+            Zc(:, :, k) = (k-0.25d0)*dZ
         enddo
+        Xc(:, :, :) = Xc(:, :, :) + 10d-10*dX  ! 速度定義点から少しずらして外力点を定義
+        Yc(:, :, :) = Yc(:, :, :) + 10d-10*dY
+        Zc(:, :, :) = Zc(:, :, :) + 10d-10*dZ
 
         ! 円柱上の座標での速度
         Uc(:, :, :) = 0.0d0
@@ -1682,6 +1693,9 @@ contains
         real(8) Ub(1:NC, 1:NL, 1:NZ), Vb(1:NC, 1:NL, 1:NZ), Wb(1:NC, 1:NL, 1:NZ)
         real(8) fxtmp(1:NX, 1:NY, 0:NZ+1), fytmp(1:NX, 1:NY, 0:NZ+1), fztmp(1:NX, 1:NY, 0:NZ+1)
         real(8) er
+        real(8) count3d(0:NX+1, 0:NY+1, 0:NZ+1), count3d_debug(6, 0:NX+1, 0:NY+1, 0:NZ+1)
+        count3d(:, :, :) = 0.0d0
+        count3d_debug(:, :, :, :) = 0.0d0
         
         Ub(:, :, :) = 0.0d0
         Vb(:, :, :) = 0.0d0
@@ -1745,6 +1759,7 @@ contains
                                 fxtmp(i, j, k) = fxtmp(i, j, k) &
                                                + Fxc(l, m, n) * delta(X(i, j, k)+0.5d0*dX, Y(i, j, k), Z(i, j, k), &
                                                                       Xc(l, m, n), Yc(l, m, n), Zc(l, m, n)) * dV
+                                count3d(i, j, k) = count3d(i, j, k) + 1
                             enddo
                         enddo
                     enddo
@@ -1769,6 +1784,28 @@ contains
                 enddo
             enddo
         enddo
+
+        ! do k = 0, NZ+1
+        !     do j = 0, NY+1
+        !         write(*, '(100I3)') count3d(:, j, k)
+        !     enddo
+        ! enddo
+        ! do j = 0, NY+1
+        !     do i = 0, NX+1
+        !         write(*, '(100I6)', advance='no') count3d(i, j, 1)
+        !     enddo
+        !     write(*, *) ''
+        ! enddo
+        ! write(*, *) ''
+        ! do k = 0, NZ+1
+        !     write(*, '(100I6)', advance='no') sum(count3d(:, :, k))
+        ! enddo
+        ! write(*, *) ''
+
+        count3d_debug(1, :, :, :) = count3d(:, :, :)
+
+        call get_data_xy(Up, Vp, Wp, count3d_debug, 0)
+
         fxint(:, :, :) = fxtmp(:, :, 1:NZ)
         fyint(:, :, :) = fytmp(:, :, 1:NZ)
         fzint(:, :, :) = fztmp(:, :, 1:NZ)
