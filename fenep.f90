@@ -1,43 +1,50 @@
 module smac
     implicit none
-    ! gfortran fenep.f90 -I$HOME/local/include -L$HOME/local/lib -lfftw3 && ./a.out
+    ! gfortran fenep.f90 -I$HOME/local/include -L$HOME/local/lib -lfftw3 -llapack && ./a.out
     ! ステップ数
     integer, parameter :: Nstep = 1
-    integer, parameter :: Gstep = 1000  ! データを取得する間隔
+    integer, parameter :: Gstep = 1  ! データを取得する間隔
     integer, parameter :: Estep = 1000  ! エネルギースペクトルを取得する間隔
-    integer, parameter :: Dstep = 10  ! デバッグする間隔
-    character(*), parameter :: dir = './debug/'
+    integer, parameter :: Dstep = 1  ! デバッグする間隔
     integer, parameter :: input_step = 0  ! 0以外で初期条件をファイルから読み込む
     integer, parameter :: output_step = 100000  ! 配列を保存する間隔
-    ! 手法
-    integer, parameter :: method = 2  ! 0:陽解法、1:FFT、2:IBM
     real(8), parameter :: PI = acos(-1.0d0)
     ! パラメータ
-    integer, parameter :: NX = 32, NY = NX, NZ = NX
+    integer, parameter :: NX = 64, NY = NX, NZ = NX
     real(8), parameter :: dX = 2*PI/NX, dY = 2*PI/NY, dZ = 2*PI/NZ
-    real(8), parameter :: dt = 0.01d0
+    real(8), parameter :: dt = 0.005d0
+    ! 手法
+    integer, parameter :: method = 2  ! 0:陽解法、1:FFT、2:IBM
+    integer, parameter :: ibm_type = 21  ! 11:円柱表面1つ、12:円柱表面4つ(直径:2*PI/8.0d0)、13:円柱表面4つ(直径:2*PI/6.0d0)、21:円柱内部4つ(直径:2*PI/6.0d0)
+    integer, parameter :: flow_type = 0  ! 0:外力なし(f=0)、3:テイラーグリーン外力、4:テイラーグリーン渦の減衰
+    integer, parameter :: eigen_method = 1  ! 0:カルダノ、1:シルベスター、2:LAPACK
     ! 無次元パラメータ
-    real(8), parameter :: Re_s = 1.0d0
-    real(8), parameter :: beta = 0.9d0
-    real(8), parameter :: Re = Re_s*beta
+    ! real(8), parameter :: Re = 1.0d0
+    real(8), parameter :: beta = 1.0d0
     real(8), parameter :: Wi = 1.0d0
     real(8), parameter :: Lp = 55.0d0
     ! 有次元パラメータ
-    real(8), parameter :: L_C = 1.0d0  ! 長さが100なら100/2*PI
-    real(8), parameter :: U_C = 1.0d0  ! 本来は乱流テイラーグリーン渦の平均流の速さ
-    real(8), parameter :: f0 = 1.0d0  ! 無次元化したときに1となるように
+    ! real(8), parameter :: L_C = 1.0d0  ! 長さが100なら100/2*PI
+    ! real(8), parameter :: U_C = 1.0d0  ! 本来は乱流テイラーグリーン渦の平均流の速さ
+    ! real(8), parameter :: nu = L_C*U_C/Re
+    ! 実験と同様のパラメータ
+    integer, parameter :: f_C = 2  ! 円柱回転速度[rps]
+    real(8), parameter :: D_C = 0.03d0  ! 円柱直径[m]
+    real(8), parameter :: U_C = f_C * PI * D_C  ! 代表速度
+    real(8), parameter :: L_C = D_C / (2*PI/6.0d0)  ! 代表長さ
+    real(8), parameter :: nu = 1.0d-6  ! 動粘性係数
+    real(8), parameter :: Re = U_C*L_C/nu
+    ! その他のパラメータ
     real(8), parameter :: dX_C = dX*L_C, dY_C = dY*L_C, dZ_C = dZ*L_C
     real(8), parameter :: dt_C = dt*L_C/U_C
-    real(8), parameter :: nu = L_C*U_C/Re_s
     ! グローバル変数
-    integer eigen_method  ! 固有値の求め方
+    character(64) :: dir = './data/'
     real(8) counter(0:3), newton_itr
     integer poisson_itr
     ! LAPACK用変数
-    ! integer, parameter :: N = 3
-    ! integer :: info
-    ! real(8) :: A(N, N), w0(N), work(3*N-1)
-    ! integer :: lwork = 3*N-1
+    integer :: info
+    real(8) :: A(3, 3), w0(3), work(3*3-1)
+    integer :: lwork = 3*3-1
 
 
 contains
@@ -47,23 +54,35 @@ contains
         real(8), intent(out) :: C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
         real(8), intent(out) :: Fx(1:NX, 1:NY, 1:NZ), Fy(1:NX, 1:NY, 1:NZ), Fz(1:NX, 1:NY, 1:NZ)
         integer i, j, k
-        real(8), parameter :: large_K = 2.0d0
+        character(2) str
+        write(str, '(I2.2)') ibm_type
+
+        if (method == 1) dir = trim(dir)//'fft'
+        if (method == 2) dir = trim(dir)//'ibm'//str
+        if (flow_type == 1) dir = trim(dir)//'_couette'
+        if (flow_type == 2) dir = trim(dir)//'_poiseuille'
+        if (flow_type == 3) dir = trim(dir)//'_taylor'
+        if (flow_type == 4) dir = trim(dir)//'_taylor_decay'
+        if (beta == 1.0d0) dir = trim(dir)//'_newton'
+        dir = trim(dir)//'/'
+        write(*, '(a, a)') 'dir:  ', dir
+        call mk_dir(dir)
 
         if (method == 0) then
             write(*, '(a, F8.3, F8.3, F8.3, a8)') 'Von Neumann:', beta/Re*dt/dX**2, beta/Re*dt/dY**2, beta/Re*dt/dZ**2, '< 0.167'
         endif
-        write(*, '(a, F8.3, F8.3, F8.3, a8)') 'CFL :', 1.0d0*dt/dX, 1.0d0*dt/dY, 1.0d0*dt/dZ,'< 0.167'
+        write(*, '(a, F8.3, F8.3, F8.3, a8)') 'CFL:', 1.0d0*dt/dX*6.0d0, 1.0d0*dt/dY*6.0d0, 1.0d0*dt/dZ*6.0d0,'< 1.0'
         ! write(*, '(a5, F8.3)') 'tau =', tau
         ! write(*, '(a5, F8.3)') 'nu  =', beta/Re*U_C*Xmax  ! beta/Re*U_C*Xmax：実際のnu、beta/Re：計算上のnu
         ! write(*, '(a, F9.4)') 'U_C =', U_C
         ! write(*, '(a, F9.4)') 'Re =', Re
         ! write(*, '(a, F9.4)') 'nu_s =', nu_s
-        ! write(*, '(a, F12.8)') 'dt =', dt
+        write(*, '(a, F12.8)') 'dt_C =', dt_C
 
         ! 初期条件（Taylor-Green）
-        ! U(:, :, :) = 0.0d0
-        ! V(:, :, :) = 0.0d0
-        ! W(:, :, :) = 0.0d0
+        U(:, :, :) = 0.0d0
+        V(:, :, :) = 0.0d0
+        W(:, :, :) = 0.0d0
         call random_number(U)
         call random_number(V)
         call random_number(W)
@@ -75,37 +94,38 @@ contains
         Fx(:, :, :) = 0.0d0
         Fy(:, :, :) = 0.0d0
         Fz(:, :, :) = 0.0d0
-        do k = 1, NZ
-            do j = 1, NY
-                do i = 1, NX
-                    ! U(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)  ! テイラー渦
-                    ! V(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
-
-                    ! Fx(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY) * cos((k-0.5d0)*dZ)  ! 荒木さん
-                    ! Fy(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY) * cos((k-0.5d0)*dZ)
-                    Fx(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)  ! 増田さん, 安房井さん
-                    Fy(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
-                    ! Fx(i, j, k) = -sin(i*dX) * cos((k-0.5d0)*dZ)  ! x, z 増田さん, 安房井さん
-                    ! Fz(i, j, k) = cos((i-0.5d0)*dX) * sin(k*dZ)
-                    ! Fx(i, j, k) = -sin(large_K*(j-0.5d0)*dY)  ! 小井手さん
-                    ! Fy(i, j, k) = sin(large_K*(i-0.5d0)*dX)
+        if (flow_type == 3) then
+            do k = 1, NZ
+                do j = 1, NY
+                    do i = 1, NX
+                        Fx(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)  ! 増田さん, 安房井さん
+                        Fy(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
+                        ! Fx(i, j, k) = -sin(i*dX) * cos((k-0.5d0)*dZ)  ! x-z 増田さん, 安房井さん
+                        ! Fz(i, j, k) = cos((i-0.5d0)*dX) * sin(k*dZ)
+                        ! Fx(i, j, k) = -sin(2.0d0*(j-0.5d0)*dY)  ! 小井手さん
+                        ! Fy(i, j, k) = sin(2.0d0*(i-0.5d0)*dX)
+                        ! Fx(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY) * cos((k-0.5d0)*dZ)  ! 荒木さん
+                        ! Fy(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY) * cos((k-0.5d0)*dZ)
+                    enddo
                 enddo
             enddo
-        enddo
-        Fx(:, :, :) = f0 * Fx(:, :, :)
-        Fy(:, :, :) = f0 * Fy(:, :, :)
-        Fz(:, :, :) = f0 * Fz(:, :, :)
-
+        endif
+        if (flow_type == 4) then
+            do k = 1, NZ
+                do j = 1, NY
+                    do i = 1, NX
+                        U(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)  ! テイラー渦
+                        V(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
+                    enddo
+                enddo
+            enddo
+        endif
         call random_number(C)
         C(:, :, :, :) = 0.001d0 * (C(:, :, :, :)-0.5d0)
+        ! C(:, :, :, :) = 0.0d0
         C(1, :, :, :) = C(1, :, :, :) + 1.0d0
         C(4, :, :, :) = C(4, :, :, :) + 1.0d0
         C(6, :, :, :) = C(6, :, :, :) + 1.0d0
-
-        ! C(:, :, :, :) = 0.0d0
-        ! C(1, :, :, :) = 1.2d0
-        ! C(4, :, :, :) = 1.1d0
-        ! C(6, :, :, :) = 1.0d0
 
         call PBM(U)
         call PBM(V)
@@ -114,6 +134,27 @@ contains
         call C_PBM(C)
 
     end subroutine init
+
+    subroutine PBM(A)
+        real(8), intent(inout) :: A(0:NX+1, 0:NY+1, 0:NZ+1)
+        A(0, :, :) = A(NX, :, :)
+        A(NX+1, :, :) = A(1, :, :)
+        A(:, 0, :) = A(:, NY, :)
+        A(:, NY+1, :) = A(:, 1, :)
+        A(:, :, 0) = A(:, :, NZ)
+        A(:, :, NZ+1) = A(:, :, 1)
+    end subroutine PBM
+
+
+    subroutine C_PBM(C)
+        real(8), intent(inout) :: C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
+        C(:, 0, :, :) = C(:, NX, :, :)
+        C(:, NX+1, :, :) = C(:, 1, :, :)
+        C(:, :, 0, :) = C(:, :, NY, :)
+        C(:, :, NY+1, :) = C(:, :, 1, :)
+        C(:, :, :, 0) = C(:, :, :, NZ)
+        C(:, :, :, NZ+1) = C(:, :, :, 1)
+    end subroutine C_PBM
 
 
     subroutine CpxCnx(C, Cpx, Cnx)
@@ -141,6 +182,8 @@ contains
                         if (eigen_method == 0) call Cardano(Cntemp(:, l), Eigen(l, 4), Eigen(l, 5), Eigen(l, 6))
                         if (eigen_method == 1) call Sylvester(Cptemp(:, l), Eigen(l, 1))
                         if (eigen_method == 1) call Sylvester(Cntemp(:, l), Eigen(l, 4))
+                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cptemp(:, l), 3, Eigen(l, 1:3), work, lwork, info)
+                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cntemp(:, l), 3, Eigen(l, 4:6), work, lwork, info)
                     enddo
 
                     index = 0
@@ -194,6 +237,8 @@ contains
                         if (eigen_method == 0) call Cardano(Cntemp(:, l), Eigen(l, 4), Eigen(l, 5), Eigen(l, 6))
                         if (eigen_method == 1) call Sylvester(Cptemp(:, l), Eigen(l, 1))
                         if (eigen_method == 1) call Sylvester(Cntemp(:, l), Eigen(l, 4))
+                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cptemp(:, l), 3, Eigen(l, 1:3), work, lwork, info)
+                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cntemp(:, l), 3, Eigen(l, 4:6), work, lwork, info)
                     enddo
 
                     index = 0
@@ -243,6 +288,8 @@ contains
                         if (eigen_method == 0) call Cardano(Cntemp(:, l), Eigen(l, 4), Eigen(l, 5), Eigen(l, 6))
                         if (eigen_method == 1) call Sylvester(Cptemp(:, l), Eigen(l, 1))
                         if (eigen_method == 1) call Sylvester(Cntemp(:, l), Eigen(l, 4))
+                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cptemp(:, l), 3, Eigen(l, 1:3), work, lwork, info)
+                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cntemp(:, l), 3, Eigen(l, 4:6), work, lwork, info)
                     enddo
 
                     index = 0
@@ -513,28 +560,6 @@ contains
         enddo
         x(:) = Ah(:, n+1)
     end subroutine gauss
-
-
-    subroutine C_PBM(C)
-        real(8), intent(inout) :: C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
-        C(:, 0, :, :) = C(:, NX, :, :)  ! 周期境界条件
-        C(:, NX+1, :, :) = C(:, 1, :, :)
-        C(:, :, 0, :) = C(:, :, NY, :)
-        C(:, :, NY+1, :) = C(:, :, 1, :)
-        C(:, :, :, 0) = C(:, :, :, NZ)
-        C(:, :, :, NZ+1) = C(:, :, :, 1)
-    end subroutine C_PBM
-
-    subroutine PBM(A)
-        real(8), intent(inout) :: A(0:NX+1, 0:NY+1, 0:NZ+1)
-        A(0, :, :) = A(NX, :, :)
-        A(NX+1, :, :) = A(1, :, :)
-        A(:, 0, :) = A(:, NY, :)
-        A(:, NY+1, :) = A(:, 1, :)
-        A(:, :, 0) = A(:, :, NZ)
-        A(:, :, NZ+1) = A(:, :, 1)
-    end subroutine PBM
-
 
     subroutine polymer_stress(C, Tx, Ty, Tz)
         real(8), intent(in) :: C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
@@ -839,7 +864,7 @@ contains
         call PBM(P)
     end subroutine march
 
-    subroutine taylor_debag(U, V, W, step)
+    subroutine taylor_debug(U, V, W, step)
         real(8), intent(in) :: U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
         integer, intent(in) :: step
         integer i, j, k
@@ -867,10 +892,10 @@ contains
         err = (sum((U0(1:NX, 1:NY, 1:NZ)-U(1:NX, 1:NY, 1:NZ))**2) &
               +sum((V0(1:NX, 1:NY, 1:NZ)-V(1:NX, 1:NY, 1:NZ))**2) &
               +sum((W0(1:NX, 1:NY, 1:NZ)-W(1:NX, 1:NY, 1:NZ))**2))/(NX*NY*NZ)
-        open(10, file=dir//'debag2.d', position='append')
+        open(10, file=trim(dir)//'taylor_debug.d', position='append')
         write(10, *) step, U0(i, j, k), U(i, j, k), U0(i, j, k) - U(i, j, k), sqrt(err)
         close(10)
-    end subroutine taylor_debag
+    end subroutine taylor_debug
 
 
     subroutine get_data(U, V, W, step)
@@ -881,8 +906,7 @@ contains
         character(8) str
         write(str, '(I8.8)') step  ! 数値を文字列に変換
 
-        ! open(10, file='data/y_'//str//'.d')
-        open(10, file=dir//'all_'//str//'.d')
+        open(10, file=trim(dir)//'all_'//str//'.d')
 
         do k = 1, NZ
             do j = 1, NY
@@ -924,7 +948,7 @@ contains
         real(8) D(3, 3), omega, sendan, Qti, trC
         character(8) str
         write(str, '(I8.8)') step  ! 数値を文字列に変換
-        open(10, file=dir//'z_'//str//'.d')
+        open(10, file=trim(dir)//'z_'//str//'.d')
 
         k = NZ/2
         do j = 1, NY
@@ -964,7 +988,7 @@ contains
         real(8) D(3, 3), Omega(3), S(3), Qti, trC
         character(8) str
         write(str, '(I8.8)') step  ! 数値を文字列に変換
-        open(10, file=dir//'y_'//str//'.d')
+        open(10, file=trim(dir)//'y_'//str//'.d')
 
         j = NY/2
         do k = 1, NZ
@@ -1011,6 +1035,7 @@ contains
         real(8) U_tmp(0:NX+1, 0:NY+1, 0:NZ+1), V_tmp(0:NX+1, 0:NY+1, 0:NZ+1), W_tmp(0:NX+1, 0:NY+1, 0:NZ+1)
         real(8) U_grad(NX, NY, NZ), V_grad(NX, NY, NZ), W_grad(NX, NY, NZ)
         real(8) U_rms, lamda, Re_lamda, tmp, D(3, 3), S(3, 3), epsilon, eta
+        real(8) mean, std
 
         if (mod(step, Dstep) == 0) then
             ! テイラー長レイノルズ数
@@ -1079,15 +1104,22 @@ contains
             K_energy = K_energy/(NX*NY*NZ)
             write(*, '(a, e12.4)', advance='no') '  | K_energy:', K_energy
 
-            write(*, '(a, F6.3)', advance='no') '  | index 0:', counter(0)*1.0d0/sum(counter)
-            write(*, '(a, F6.3)', advance='no') '  1:', counter(1)*1.0d0/sum(counter)
-            write(*, '(a, F6.3)', advance='no') '  2:', counter(2)*1.0d0/sum(counter)
-            write(*, '(a, F6.3)', advance='no') '  3:', counter(3)*1.0d0/sum(counter)
+            ! CFL条件（ただし規格化し、1以下で満たすようにしている）
+            write(*, '(a, F7.3)', advance='no') &
+            '  | CFL:', max(maxval(U(:, :, :))*dt/dX, maxval(V(:, :, :))*dt/dY, maxval(W(:, :, :))*dt/dY)*6.0d0
+
+            ! write(*, '(a, F6.3)', advance='no') '  | index 0:', counter(0)*1.0d0/sum(counter)
+            ! write(*, '(a, F6.3)', advance='no') '  1:', counter(1)*1.0d0/sum(counter)
+            ! write(*, '(a, F6.3)', advance='no') '  2:', counter(2)*1.0d0/sum(counter)
+            ! write(*, '(a, F6.3)', advance='no') '  3:', counter(3)*1.0d0/sum(counter)
             ! write(*, '(a, F6.2)', advance='no') '  | newton_itr:', newton_itr*1.0d0/(NX*NY*NZ)
             ! write(*, '(a, I5)', advance='no') '  | poisson_itr:', poisson_itr
 
             trC(:, :, :) = C(1, 1:NX, 1:NY, 1:NZ)+C(4, 1:NX, 1:NY, 1:NZ)+C(6, 1:NX, 1:NY, 1:NZ)
-            write(*, '(a, F7.3, a, F8.3)', advance='no') '  |', minval(trC(:, :, :)), '< trC <', maxval(trC(:, :, :))
+            mean = sum(trC) / (NX*NY*NZ)
+            std = sqrt(sum((trC-mean)**2) / (NX*NY*NZ))
+            write(*, '(a, F8.3, a, F7.3)', advance='no') '  | trC:', mean, ' +-', std
+            ! write(*, '(a, F7.3, a, F8.3)', advance='no') '  |', minval(trC(:, :, :)), '< trC <', maxval(trC(:, :, :))
             ! write(*, '(a, F7.3, a, F7.3)', advance='no') '  |', minval(C(1, :, :, :)), '< Cxx <', maxval(C(1, :, :, :))
             ! write(*, '(a, F7.3, a, F7.3)', advance='no') '  |', minval(C(4, :, :, :)), '< Cyy <', maxval(C(4, :, :, :))
             ! write(*, '(a, F7.3, a, F7.3)', advance='no') '  |', minval(C(6, :, :, :)), '< Czz <', maxval(C(6, :, :, :))
@@ -1104,7 +1136,7 @@ contains
                     enddo
                 enddo
             enddo
-            write(*, '(a, F7.3)', advance='no') '  | SPD:', count*1.0d0/(NX*NY*NZ)
+            ! write(*, '(a, F7.3)', advance='no') '  | SPD:', count*1.0d0/(NX*NY*NZ)
 
             ! write(*, '(a, e12.4)', advance='no') '  | Re_lamda:', Re_lamda
             ! write(*, '(a, e12.4)', advance='no') '  | epsilon:', epsilon
@@ -1121,19 +1153,99 @@ contains
         endif
     end subroutine logging
 
+    subroutine get_data_binary(U, V, W, C, step)
+        real(8), intent(in) :: U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
+        real(8), intent(in) :: C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
+        integer, intent(in) :: step
+        integer i, j, k
+        real(8) D(3, 3), Omega(3), S(3), Qti, trC, E(3)
+        character(8) str
+        write(str, '(I8.8)') step  ! 数値を文字列に変換
 
-    subroutine input(U, V, W, P, C)  ! initを実行した後に書く
+        open(10, file=trim(dir)//'z_'//str//'.bin', form='unformatted', status='replace', access='stream')  ! convert='big_endian'は不要
+        k = NZ/2  ! x-y平面
+        do j = 1, NY
+            do i = 1, NX
+                D(1, 1) = (U(i, j, k) - U(i-1, j, k))/dX
+                D(1, 2) = (U(i, j+1, k) - U(i, j-1, k) + U(i-1, j+1, k) - U(i-1, j-1, k))/(4*dY)
+                D(1, 3) = (U(i, j, k+1) - U(i, j, k-1) + U(i-1, j, k+1) - U(i-1, j, k-1))/(4*dZ)
+                D(2, 1) = (V(i+1, j, k) - V(i-1, j, k) + V(i+1, j-1, k) - V(i-1, j-1, k))/(4*dX)
+                D(2, 2) = (V(i, j, k) - V(i, j-1, k))/dY
+                D(2, 3) = (V(i, j, k+1) - V(i, j, k-1) + V(i, j-1, k+1) - V(i, j-1, k-1))/(4*dZ)
+                D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
+                D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
+                D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
+                D(:, :) = D(:, :)*U_C
+
+                E(1) = (U(i-1, j, k)+U(i, j, k))/2*U_C
+                E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
+                E(3) = (W(i, j, k-1)+W(i, j, k))/2*U_C
+                Omega(1) = (D(3, 2) - D(2, 3))
+                Omega(2) = (D(1, 3) - D(3, 1))
+                Omega(3) = (D(2, 1) - D(1, 2))
+                S(1) = (D(3, 2) + D(2, 3))
+                S(2) = (D(1, 3) + D(3, 1))
+                S(3) = (D(2, 1) + D(1, 2))
+                Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
+                trC = C(1, i, j, k) + C(4, i, j, k) + C(6, i, j, k)
+
+                write(10) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, E(1), E(2), E(3), sum(E**2)/2, &
+                          Omega(1), Omega(2), Omega(3), sum(Omega**2)/2, &
+                          trC, C(1, i, j, k), C(2, i, j, k), C(3, i, j, k), C(4, i, j, k), C(5, i, j, k), C(6, i, j, k)
+            enddo
+        enddo
+        close(10)
+
+        open(20, file=trim(dir)//'y_'//str//'.bin', form='unformatted', status='replace', access='stream')
+        j = NY/2  ! x-z平面
+        do k = 1, NZ
+            do i = 1, NX
+                D(1, 1) = (U(i, j, k) - U(i-1, j, k))/dX
+                D(1, 2) = (U(i, j+1, k) - U(i, j-1, k) + U(i-1, j+1, k) - U(i-1, j-1, k))/(4*dY)
+                D(1, 3) = (U(i, j, k+1) - U(i, j, k-1) + U(i-1, j, k+1) - U(i-1, j, k-1))/(4*dZ)
+                D(2, 1) = (V(i+1, j, k) - V(i-1, j, k) + V(i+1, j-1, k) - V(i-1, j-1, k))/(4*dX)
+                D(2, 2) = (V(i, j, k) - V(i, j-1, k))/dY
+                D(2, 3) = (V(i, j, k+1) - V(i, j, k-1) + V(i, j-1, k+1) - V(i, j-1, k-1))/(4*dZ)
+                D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
+                D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
+                D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
+                D(:, :) = D(:, :)*U_C
+
+                E(1) = (U(i-1, j, k)+U(i, j, k))/2*U_C
+                E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
+                E(3) = (W(i, j, k-1)+W(i, j, k))/2*U_C
+                Omega(1) = (D(3, 2) - D(2, 3))
+                Omega(2) = (D(1, 3) - D(3, 1))
+                Omega(3) = (D(2, 1) - D(1, 2))
+                S(1) = (D(3, 2) + D(2, 3))
+                S(2) = (D(1, 3) + D(3, 1))
+                S(3) = (D(2, 1) + D(1, 2))
+                Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
+                trC = C(1, i, j, k) + C(4, i, j, k) + C(6, i, j, k)
+                write(20) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, E(1), E(2), E(3), sum(E**2)/2, &
+                          Omega(1), Omega(2), Omega(3), sum(Omega**2)/2, &
+                          trC, C(1, i, j, k), C(2, i, j, k), C(3, i, j, k), C(4, i, j, k), C(5, i, j, k), C(6, i, j, k)
+            enddo
+        enddo
+        close(20)
+    end subroutine get_data_binary
+
+
+    subroutine input(U, V, W, P, C, Ax0, Ay0, Az0, Tx0, Ty0, Tz0)  ! initを実行した後に書く
         real(8), intent(out) :: U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
         real(8), intent(out) :: P(0:NX+1, 0:NY+1, 0:NZ+1), C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
+        real(8), intent(out) :: Ax0(1:NX, 1:NY, 1:NZ), Ay0(1:NX, 1:NY, 1:NZ), Az0(1:NX, 1:NY, 1:NZ)
+        real(8), intent(out) :: Tx0(1:NX, 1:NY, 1:NZ), Ty0(1:NX, 1:NY, 1:NZ), Tz0(1:NX, 1:NY, 1:NZ)
         integer i, j, k
         character(8) str
         real(8) K_energy
         write(str, '(I8.8)') input_step  ! 数値を文字列に変換
-        open(10, file=dir//str//'.d')
+        open(10, file=trim(dir)//str//'.d')
         do k = 1, NZ
             do j = 1, NY
                 do i = 1, NX
-                    read(10, '(10e12.4)') U(i, j, k), V(i, j, k), W(i, j, k), P(i, j, k), C(:, i, j, k)
+                    read(10, *) U(i, j, k), V(i, j, k), W(i, j, k), P(i, j, k), C(:, i, j, k), &
+                                Ax0(i, j, k), Ay0(i, j, k), Az0(i, j, k), Tx0(i, j, k), Ty0(i, j, k), Tz0(i, j, k)
                 enddo
             enddo
         enddo
@@ -1150,24 +1262,148 @@ contains
 
     end subroutine input
 
-    subroutine output(U, V, W, P, C, step)
+    subroutine output(U, V, W, P, C, Ax, Ay, Az, Tx, Ty, Tz, step)
         real(8), intent(in) :: U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
         real(8), intent(in) :: P(0:NX+1, 0:NY+1, 0:NZ+1), C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
+        real(8), intent(in) :: Ax(1:NX, 1:NY, 1:NZ), Ay(1:NX, 1:NY, 1:NZ), Az(1:NX, 1:NY, 1:NZ)
+        real(8), intent(in) :: Tx(1:NX, 1:NY, 1:NZ), Ty(1:NX, 1:NY, 1:NZ), Tz(1:NX, 1:NY, 1:NZ)
         integer, intent(in) :: step
         integer i, j, k
         character(8) str
-        write(str, '(I8.8)') step  ! 数値を文字列に変換
-        open(10, file=dir//str//'.d')
+        write(str, '(I8.8)') step
+        open(10, file=trim(dir)//str//'.d')
 
         do k = 1, NZ
             do j = 1, NY
                 do i = 1, NX
-                    write(10, '(10e12.4)') U(i, j, k), V(i, j, k), W(i, j, k), P(i, j, k), C(:, i, j, k)
+                    write(10, *) U(i, j, k), V(i, j, k), W(i, j, k), P(i, j, k), C(:, i, j, k), &
+                                 Ax(i, j, k), Ay(i, j, k), Az(i, j, k), Tx(i, j, k), Ty(i, j, k), Tz(i, j, k)
                 enddo
             enddo
         enddo
         close(10)
     end subroutine output
+
+    subroutine vtk_binary(U, V, W, step)
+        real(8), intent(in) :: U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
+        integer, intent(in) :: step
+        integer i, j, k
+        real(8) D(3, 3), Omega(3), Enstrophy(1:NX, 1:NY, 1:NZ)
+        character(8) str
+        character(120) buffer
+        character lf
+        lf = char(10)  ! 改行コード
+
+        do k = 1, NZ
+            do j = 1, NY
+                do i = 1, NX
+                    D(1, 1) = (U(i, j, k) - U(i-1, j, k))/dX
+                    D(1, 2) = (U(i, j+1, k) - U(i, j-1, k) + U(i-1, j+1, k) - U(i-1, j-1, k))/(4*dY)
+                    D(1, 3) = (U(i, j, k+1) - U(i, j, k-1) + U(i-1, j, k+1) - U(i-1, j, k-1))/(4*dZ)
+                    D(2, 1) = (V(i+1, j, k) - V(i-1, j, k) + V(i+1, j-1, k) - V(i-1, j-1, k))/(4*dX)
+                    D(2, 2) = (V(i, j, k) - V(i, j-1, k))/dY
+                    D(2, 3) = (V(i, j, k+1) - V(i, j, k-1) + V(i, j-1, k+1) - V(i, j-1, k-1))/(4*dZ)
+                    D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
+                    D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
+                    D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
+                    D(:, :) = D(:, :)*U_C
+
+                    Omega(1) = (D(3, 2) - D(2, 3))
+                    Omega(2) = (D(1, 3) - D(3, 1))
+                    Omega(3) = (D(2, 1) - D(1, 2))
+                    Enstrophy(i, j, k) = sum(Omega**2)/2
+                enddo
+            enddo
+        enddo
+        
+        write(str, '(I8.8)') step
+        open(10, file=trim(dir)//str//'.vtk', status='replace', form='unformatted', &
+                 action='write', access='stream', convert='big_endian')
+
+        write(buffer,'(a)') '# vtk DataFile Version 3.0'//lf
+        write(10) trim(buffer)
+        write(buffer,'(a)') 'Enstrophy'//lf
+        write(10) trim(buffer)
+        write(buffer,'(a)') 'BINARY'//lf
+        write(10) trim(buffer)
+        write(buffer,'(a)') 'DATASET STRUCTURED_POINTS'//lf
+        write(10) trim(buffer)
+        write(buffer,'(a, 3(1x, i4))') 'DIMENSIONS', NX, NY, NZ
+        write(10) trim(buffer)
+        write(buffer,'(a, 3(1x, i3))') lf//'ORIGIN', 0, 0, 0
+        write(10) trim(buffer)
+        write(buffer,'(a, 3(1x, f16.10))') lf//'SPACING', dX_C, dY_C, dZ_C
+        write(10) trim(buffer)
+        write(buffer,'(a, i10)') lf//'POINT_DATA ', NX*NY*NZ
+        write(10) trim(buffer)
+        write(buffer,'(a)') lf//'SCALARS '//'Enstrophy'//' double'//lf
+        write(10) trim(buffer)
+        write(buffer,'(a)') 'LOOKUP_TABLE default'//lf
+        write(10) trim(buffer)
+        do k = 1, NZ
+            do j = 1, NY
+                do i = 1, NX
+                    write(10) Enstrophy(i, j, k)
+                enddo
+            enddo
+        enddo
+        close(10)
+    end subroutine vtk_binary
+
+    subroutine vtk_ascii(U, V, W, step)
+        real(8), intent(in) :: U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
+        integer, intent(in) :: step
+        integer i, j, k
+        real(8) D(3, 3), Omega(3), Enstrophy(1:NX, 1:NY, 1:NZ)
+        character(8) str
+        character lf
+        lf = char(10)
+
+        do k = 1, NZ
+            do j = 1, NY
+                do i = 1, NX
+                    D(1, 1) = (U(i, j, k) - U(i-1, j, k))/dX
+                    D(1, 2) = (U(i, j+1, k) - U(i, j-1, k) + U(i-1, j+1, k) - U(i-1, j-1, k))/(4*dY)
+                    D(1, 3) = (U(i, j, k+1) - U(i, j, k-1) + U(i-1, j, k+1) - U(i-1, j, k-1))/(4*dZ)
+                    D(2, 1) = (V(i+1, j, k) - V(i-1, j, k) + V(i+1, j-1, k) - V(i-1, j-1, k))/(4*dX)
+                    D(2, 2) = (V(i, j, k) - V(i, j-1, k))/dY
+                    D(2, 3) = (V(i, j, k+1) - V(i, j, k-1) + V(i, j-1, k+1) - V(i, j-1, k-1))/(4*dZ)
+                    D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
+                    D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
+                    D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
+                    D(:, :) = D(:, :)*U_C
+
+                    Omega(1) = (D(3, 2) - D(2, 3))
+                    Omega(2) = (D(1, 3) - D(3, 1))
+                    Omega(3) = (D(2, 1) - D(1, 2))
+                    Enstrophy(i, j, k) = sum(Omega**2)/2
+                enddo
+            enddo
+        enddo
+
+        write(str, '(I8.8)') step
+        open(100, file=trim(dir)//str//'.vtk')
+
+        write(100, "('# vtk DataFile Version 3.0')")
+        write(100, "('Enstrophy')")
+        write(100, "('ASCII')")
+        write(100, "('DATASET STRUCTURED_POINTS')")
+        write(100, "('DIMENSIONS', 3(1x, i3))") NX, NY, NZ
+        write(100, "('ORIGIN', 3(1x, i3))") 0, 0, 0
+        write(100, "('SPACING', 3(1x, f16.10))") dX_C, dY_C, dZ_C
+        write(100, "('POINT_DATA', i9)") NX*NY*NZ
+        write(100, "('SCALARS Enstrophy double')")
+        write(100, "('LOOKUP_TABLE default')")
+
+        do k = 1, NZ
+            do j = 1, NY
+                do i = 1, NX
+                    write(100,"(3(f16.10, 1x))") Enstrophy(i, j, k)
+                enddo
+            enddo
+        enddo
+        close(100)
+    end subroutine vtk_ascii
 
     subroutine mk_dir(outdir)
         implicit none
@@ -1233,7 +1469,7 @@ contains
         integer i, j, k
         real(8) Q(1:NX, 1:NY, 1:NZ), LHS(1:NX, 1:NY, 1:NZ)
 
-        if (step==1) then  ! 1ステップ目のみ例外処理
+        if (step==1 .and. input_step==0) then  ! 1ステップ目のみ例外処理
             Ax0(:, :, :) = Ax(:, :, :)
             Ay0(:, :, :) = Ay(:, :, :)
             Az0(:, :, :) = Az(:, :, :)
@@ -1480,7 +1716,7 @@ contains
         enddo
 
         ! 出力
-        ! open(10, file=dir//str//'.d')
+        ! open(10, file=trim(dir)//str//'.d')
         ! do i = 0, NX
         !     write(10, '(I4, e12.4)') i, Energy(i)
         ! enddo
@@ -1492,7 +1728,7 @@ contains
         K_energy = K_energy/2.d0
         K_energy = K_energy/(NX*NY*NZ)
         write(*, '(I6, 5e12.4)') step, K_energy, sum(Energy(:)), K_energy-sum(Energy(:)), Energy(0), K_energy/sum(Energy(:))   ! 一致するはず
-        ! open(30, file = 'fft/debag_energy.d', position='append')
+        ! open(30, file = 'fft/energy_time.d', position='append')
         ! write(30, '(I6, 2e12.4)') step, K_energy, sum(Energy(:))
         ! close(30)
 
@@ -1504,17 +1740,61 @@ module ibm
     use fft
     implicit none
     ! IBM用パラメータ
-    real(8), parameter :: DC = 2*PI/8.0d0  ! 円柱直径
-    integer, parameter :: NC = 4  ! 円柱の個数
-    integer, parameter :: NS = 1  ! 反復回数
-    integer, parameter :: NL = nint(PI*DC/dX)  ! 円周方向の分割数
-    real(8), parameter :: dV = PI*DC/NL * dX * dX
+    integer NC, NL
+    real(8) DC, dV
+    character(64) :: dir_ibm = './ibm/'
 contains
-    subroutine ibm_init(X, Y, Z, Xc, Yc, Zc, Uc, Vc, Wc)
+    subroutine ibm_init(X, Y, Z, Xc, Yc, Zc, Uc, Vc, Wc, Fxc, Fyc, Fzc)
         real(8), intent(out) :: X(0:NX+1, 0:NY+1, 0:NZ+1), Y(0:NX+1, 0:NY+1, 0:NZ+1), Z(0:NX+1, 0:NY+1, 0:NZ+1)
-        real(8), intent(out) :: Xc(1:NC, 1:NL, 1:NZ), Yc(1:NC, 1:NL, 1:NZ), Zc(1:NC, 1:NL, 1:NZ)
-        real(8), intent(out) :: Uc(1:NC, 1:NL, 1:NZ), Vc(1:NC, 1:NL, 1:NZ), Wc(1:NC, 1:NL, 1:NZ)
+        real(8), allocatable :: Xc(:, :, :), Yc(:, :, :), Zc(:, :, :)
+        real(8), allocatable :: Uc(:, :, :), Vc(:, :, :), Wc(:, :, :)
+        real(8), allocatable :: Fxc(:, :, :), Fyc(:, :, :), Fzc(:, :, :)
         integer i, j, k
+        integer index
+        integer NL_lap  ! 円柱内部の殻数
+        integer, allocatable :: NL_shell(:)  ! 殻に対する外力点の数
+        character(2) str
+        write(str, '(I2.2)') ibm_type
+        dir_ibm = trim(dir_ibm)//'ibm'//str//'/'
+        write(*, '(a, a)') 'dir_ibm:   ', dir_ibm
+        call mk_dir(trim(dir_ibm))
+
+        if (ibm_type == 11) then  ! 円柱表面1つ
+            NC = 1
+            DC = 2*PI/6.0d0
+            NL = nint(PI*DC/dX)
+            dV = PI*DC/NL * dX * dX
+        endif
+        if (ibm_type == 12) then  ! 円柱表面4つ(直径:2*PI/8.0d0)
+            NC = 4
+            DC = 2*PI/8.0d0
+            NL = nint(PI*DC/dX)
+            dV = PI*DC/NL * dX * dX
+        endif
+        if (ibm_type == 13) then  ! 円柱表面4つ(直径:2*PI/6.0d0)
+            NC = 4
+            DC = 2*PI/6.0d0
+            NL = nint(PI*DC/dX)
+            dV = PI*DC/NL * dX * dX
+        endif
+        if (ibm_type == 21) then  ! 円柱内部4つ(直径:2*PI/6.0d0)
+            NC = 4
+            DC = 2*PI/6.0d0
+            NL_lap = int(DC/(2*dX))  ! 円柱内部の殻数
+            allocate(NL_shell(0:NL_lap))
+            do i = 0, NL_lap
+                NL_shell(i) = nint(PI*(DC-2*i*dX)/dX)
+            enddo
+            if (NL_shell(NL_lap) == 0) NL_shell(NL_lap) = 1  ! 中心に外力点を1つ置く
+            NL = sum(NL_shell)
+            dV = PI*(DC+dX)**2/4 / NL * dX
+            write(*, '(a, 100I5)') 'NL_shell:  ', NL_shell(:)
+        endif
+        
+        ! NLを定義したあとallocate
+        allocate(Xc(1:NC, 1:NL, 1:NZ), Yc(1:NC, 1:NL, 1:NZ), Zc(1:NC, 1:NL, 1:NZ))
+        allocate(Uc(1:NC, 1:NL, 1:NZ), Vc(1:NC, 1:NL, 1:NZ), Wc(1:NC, 1:NL, 1:NZ))
+        allocate(Fxc(1:NC, 1:NL, 1:NZ), Fyc(1:NC, 1:NL, 1:NZ), Fzc(1:NC, 1:NL, 1:NZ))
 
         if (dX /= dY .or. dX /= dZ) then
             stop 'dX, dY and dZ are not equal'
@@ -1535,8 +1815,17 @@ contains
             Z(:, :, k) = (k-0.5d0)*dZ
         enddo
 
-        ! 円柱上の座標
-        if (NC == 4) then
+        ! 外力点の定義
+        Uc(:, :, :) = 0.0d0
+        Vc(:, :, :) = 0.0d0
+        Wc(:, :, :) = 0.0d0
+        if (ibm_type == 11) then
+            do j = 1, NL
+                Xc(1, j, :) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
+                Yc(1, j, :) = 2*PI/2 + DC/2 * sin(2*PI/NL*j)
+            enddo
+        endif
+        if (ibm_type == 12) then
             do j = 1, NL
                 Xc(1, j, :) = 2*PI* 5/16 + DC/2 * cos(2*PI/NL*j)
                 Yc(1, j, :) = 2*PI* 5/16 + DC/2 * sin(2*PI/NL*j)
@@ -1546,27 +1835,27 @@ contains
                 Yc(3, j, :) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
                 Xc(4, j, :) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
                 Yc(4, j, :) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
+                Uc(1, j, :) = -sin(2*PI/NL*j)
+                Vc(1, j, :) = cos(2*PI/NL*j)
+                Uc(2, j, :) = sin(2*PI/NL*j)
+                Vc(2, j, :) = -cos(2*PI/NL*j)
+                Uc(3, j, :) = sin(2*PI/NL*j)
+                Vc(3, j, :) = -cos(2*PI/NL*j)
+                Uc(4, j, :) = -sin(2*PI/NL*j)
+                Vc(4, j, :) = cos(2*PI/NL*j)
             enddo
-        else if (NC == 1) then
+        endif   
+        if (ibm_type == 13) then
             do j = 1, NL
                 Xc(1, j, :) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
-                Yc(1, j, :) = 2*PI/2 + DC/2 * sin(2*PI/NL*j)
-            enddo
-        endif
-        do k = 1, NZ
-            Zc(:, :, k) = (k-0.25d0)*dZ
-        enddo
-        Xc(:, :, :) = Xc(:, :, :) + 10d-10*dX  ! 速度定義点から少しずらして外力点を定義
-        Yc(:, :, :) = Yc(:, :, :) + 10d-10*dY
-        Zc(:, :, :) = Zc(:, :, :) + 10d-10*dZ
-
-        ! 円柱上の座標での速度
-        Uc(:, :, :) = 0.0d0
-        Vc(:, :, :) = 0.0d0
-        Wc(:, :, :) = 0.0d0
-        if (NC == 4) then
-            do j = 1, NL
-                Uc(1, j, :) = -sin(2*PI/NL*j)  ! 代表速度は出力時にかける
+                Yc(1, j, :) = 2*PI/4 + DC/2 * sin(2*PI/NL*j)
+                Xc(2, j, :) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
+                Yc(2, j, :) = 2*PI/4 + DC/2 * sin(2*PI/NL*j)
+                Xc(3, j, :) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
+                Yc(3, j, :) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
+                Xc(4, j, :) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
+                Yc(4, j, :) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
+                Uc(1, j, :) = -sin(2*PI/NL*j)
                 Vc(1, j, :) = cos(2*PI/NL*j)
                 Uc(2, j, :) = sin(2*PI/NL*j)
                 Vc(2, j, :) = -cos(2*PI/NL*j)
@@ -1576,6 +1865,37 @@ contains
                 Vc(4, j, :) = cos(2*PI/NL*j)
             enddo
         endif
+        if (ibm_type == 21) then
+            index = 0
+            do i = 0, NL_lap
+                do j = 1, NL_shell(i)
+                    index = index + 1
+                    Xc(1, index, :) = 2*PI/4   + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc(1, index, :) = 2*PI/4   + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Xc(2, index, :) = 2*PI*3/4 + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc(2, index, :) = 2*PI/4   + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Xc(3, index, :) = 2*PI/4   + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc(3, index, :) = 2*PI*3/4 + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Xc(4, index, :) = 2*PI*3/4 + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc(4, index, :) = 2*PI*3/4 + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Uc(1, index, :) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(1, index, :) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc(2, index, :) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(2, index, :) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc(3, index, :) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(3, index, :) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc(4, index, :) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(4, index, :) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                enddo
+            enddo
+        endif
+        do k = 1, NZ
+            Zc(:, :, k) = (k-0.25d0)*dZ
+        enddo
+        Xc(:, :, :) = Xc(:, :, :) + 10d-10*dX  ! 速度定義点から少しずらして外力点を定義
+        Yc(:, :, :) = Yc(:, :, :) + 10d-10*dY
+        Zc(:, :, :) = Zc(:, :, :) + 10d-10*dZ
+
     end subroutine ibm_init
 
     subroutine ibm_get(Xc, Yc)
@@ -1586,7 +1906,7 @@ contains
         k = NZ/2
         do i = 1, NC
             write(str, '(I8.8)') i
-            open(10, file=dir//str//'.d')
+            open(10, file=trim(dir_ibm)//str//'.d')
             do j = 1, NL
                 write(10, '(2e12.4)') Xc(i, j, k)*L_C, Yc(i, j, k)*L_C
             enddo
@@ -1594,6 +1914,57 @@ contains
             close(10)
         enddo
     end subroutine ibm_get
+
+    subroutine ibm_vtk(Xc, Yc, Zc)
+        real(8), intent(in) :: Xc(1:NC, 1:NL, 1:NZ), Yc(1:NC, 1:NL, 1:NZ), Zc(1:NC, 1:NL, 1:NZ)
+        integer NR, l, m, n, o
+        character(120) buffer
+        character(8) str
+        character lf
+        lf = char(10)  ! 改行コード
+        NR = nint(PI*DC/dX) + 1  ! 分割数+1
+
+        do l = 1, NC
+            write(str, '(I8.8)') l
+            open(10, file=trim(dir)//'cylinder_'//str//'.vtk', status='replace', form='unformatted', &
+                    action='write', access='stream', convert='big_endian')
+
+            write(buffer,'(a)') '# vtk DataFile Version 3.0'//lf
+            write(10) trim(buffer)
+            write(buffer,'(a)') 'Cylinder Data'//lf  ! hogeはなんでもいい
+            write(10) trim(buffer)
+            write(buffer,'(a)') 'BINARY'//lf
+            write(10) trim(buffer)
+            ! 座標値をvtkファイルに書き出す
+            write(buffer,'(a)') 'DATASET STRUCTURED_GRID'//lf
+            write(10) trim(buffer)
+            write(buffer,'(a, 3(1x, i4))') 'DIMENSIONS', NR, NR, NZ
+            write(10) trim(buffer)
+            write(buffer,'(a, i10, a)') lf//'POINTS ', NR*NR*NZ, 'double'//lf
+            write(10) trim(buffer)
+            do n = 1, NZ
+                do o = 1, NR  ! 3次元で円柱描くとき必要
+                    do m = 1, NR-1  ! NLではなくNR-1まで
+                        write(10) Xc(l, m, n)*L_C, Yc(l, m, n)*L_C, Zc(l, m, n)*L_C
+                    enddo
+                    write(10) Xc(l, 1, n)*L_C, Yc(l, 1, n)*L_C, Zc(l, 1, n)*L_C
+                enddo
+            enddo
+
+            ! 点データをvtkファイルに書き出す
+            write(buffer, '(a, i10)') lf//'POINT_DATA ', NR*NR*NZ
+            write(10) trim(buffer)
+            write(buffer, '(a)') lf//'SCALARS Cylinder int 1'//lf
+            write(10) trim(buffer)
+            write(buffer, '(a)') 'LOOKUP_TABLE default'//lf
+            write(10) trim(buffer)
+
+            do n = 1, NR*NR*NZ
+                write(10) n-1
+            enddo
+            close(10)
+        enddo
+    end subroutine ibm_vtk
 
     subroutine ibm_preliminary(U, V, W, P, Ax, Ay, Az, Ax0, Ay0, Az0, Bx, By, Bz, Tx, Ty, Tz, Tx0, Ty0, Tz0, &
                                Ua, Va, Wa, Fxc, Fyc, Fzc, Up, Vp, Wp, step)
@@ -1610,7 +1981,7 @@ contains
         integer, intent(in) :: step
         integer i, j, k
         
-        if (step==1) then  ! 1ステップ目のみ例外処理
+        if (step==1 .and. input_step==0) then  ! 1ステップ目のみ例外処理
             Ax0(:, :, :) = Ax(:, :, :)
             Ay0(:, :, :) = Ay(:, :, :)
             Az0(:, :, :) = Az(:, :, :)
@@ -1691,11 +2062,11 @@ contains
         real(8), intent(out) :: fxint(1:NX, 1:NY, 1:NZ), fyint(1:NX, 1:NY, 1:NZ), fzint(1:NX, 1:NY, 1:NZ)
         integer i, j, k, l, m, n
         real(8) Ub(1:NC, 1:NL, 1:NZ), Vb(1:NC, 1:NL, 1:NZ), Wb(1:NC, 1:NL, 1:NZ)
-        real(8) fxtmp(1:NX, 1:NY, 0:NZ+1), fytmp(1:NX, 1:NY, 0:NZ+1), fztmp(1:NX, 1:NY, 0:NZ+1)
-        real(8) er
-        real(8) count3d(0:NX+1, 0:NY+1, 0:NZ+1), count3d_debug(6, 0:NX+1, 0:NY+1, 0:NZ+1)
-        count3d(:, :, :) = 0.0d0
-        count3d_debug(:, :, :, :) = 0.0d0
+        real(8) fxtmp(0:NX+1, 0:NY+1, 0:NZ+1), fytmp(0:NX+1, 0:NY+1, 0:NZ+1), fztmp(0:NX+1, 0:NY+1, 0:NZ+1)
+        ! real(8) er
+        ! real(8) count3d(0:NX+1, 0:NY+1, 0:NZ+1), count3d_debug(6, 0:NX+1, 0:NY+1, 0:NZ+1)
+        ! count3d(:, :, :) = 0.0d0
+        ! count3d_debug(:, :, :, :) = 0.0d0
         
         Ub(:, :, :) = 0.0d0
         Vb(:, :, :) = 0.0d0
@@ -1759,7 +2130,7 @@ contains
                                 fxtmp(i, j, k) = fxtmp(i, j, k) &
                                                + Fxc(l, m, n) * delta(X(i, j, k)+0.5d0*dX, Y(i, j, k), Z(i, j, k), &
                                                                       Xc(l, m, n), Yc(l, m, n), Zc(l, m, n)) * dV
-                                count3d(i, j, k) = count3d(i, j, k) + 1
+                                ! count3d(i, j, k) = count3d(i, j, k) + 1
                             enddo
                         enddo
                     enddo
@@ -1802,21 +2173,27 @@ contains
         ! enddo
         ! write(*, *) ''
 
-        count3d_debug(1, :, :, :) = count3d(:, :, :)
+        ! count3d_debug(1, :, :, :) = count3d(:, :, :)
 
-        call get_data_xy(Up, Vp, Wp, count3d_debug, 0)
+        ! call get_data_xy(Up, Vp, Wp, count3d_debug, 0)
 
-        fxint(:, :, :) = fxtmp(:, :, 1:NZ)
-        fyint(:, :, :) = fytmp(:, :, 1:NZ)
-        fzint(:, :, :) = fztmp(:, :, 1:NZ)
-        fxint(:, :, 1) = fxint(:, :, 1) + fxtmp(:, :, NZ+1)
-        fyint(:, :, 1) = fyint(:, :, 1) + fytmp(:, :, NZ+1)
-        fzint(:, :, 1) = fzint(:, :, 1) + fztmp(:, :, NZ+1)
-        fxint(:, :, NZ) = fxint(:, :, NZ) + fxtmp(:, :, 0)
-        fyint(:, :, NZ) = fyint(:, :, NZ) + fytmp(:, :, 0)
-        fzint(:, :, NZ) = fzint(:, :, NZ) + fztmp(:, :, 0)
+        call ibm_PBM(fxtmp, fxint)
+        call ibm_PBM(fytmp, fyint)
+        call ibm_PBM(fztmp, fzint)
 
     end subroutine ibm_Helmholtz
+
+    subroutine ibm_PBM(ftmp, fint)
+        real(8), intent(inout) :: ftmp(0:NX+1, 0:NY+1, 0:NZ+1)
+        real(8), intent(out) :: fint(1:NX, 1:NY, 1:NZ)
+        ftmp(1, :, :) = ftmp(1, :, :) + ftmp(NX+1, :, :)
+        ftmp(NX, :, :) = ftmp(NX, :, :) + ftmp(0, :, :)
+        ftmp(:, 1, :) = ftmp(:, 1, :) + ftmp(:, NY+1, :)
+        ftmp(:, NY, :) = ftmp(:, NY, :) + ftmp(:, 0, :)
+        ftmp(:, :, 1) = ftmp(:, :, 1) + ftmp(:, :, NZ+1)
+        ftmp(:, :, NZ) = ftmp(:, :, NZ) + ftmp(:, :, 0)
+        fint(:, :, :) = ftmp(1:NX, 1:NY, 1:NZ)
+    end subroutine ibm_PBM
 
     subroutine ibm_predict(Ua, Va, Wa, fxint, fyint, fzint, Bx, By, Bz, Up, Vp, Wp)
         real(8), intent(in) :: Ua(0:NX+1, 0:NY+1, 0:NZ+1), Va(0:NX+1, 0:NY+1, 0:NZ+1), Wa(0:NX+1, 0:NY+1, 0:NZ+1)
@@ -1895,10 +2272,10 @@ program main
     real(8) Fx(1:NX, 1:NY, 1:NZ), Fy(1:NX, 1:NY, 1:NZ), Fz(1:NX, 1:NY, 1:NZ)
     ! ibmのために追加した変数
     real(8) X(0:NX+1, 0:NY+1, 0:NZ+1), Y(0:NX+1, 0:NY+1, 0:NZ+1), Z(0:NX+1, 0:NY+1, 0:NZ+1)
-    real(8) Xc(1:NC, 1:NL, 1:NZ), Yc(1:NC, 1:NL, 1:NZ), Zc(1:NC, 1:NL, 1:NZ)
-    real(8) Uc(1:NC, 1:NL, 1:NZ), Vc(1:NC, 1:NL, 1:NZ), Wc(1:NC, 1:NL, 1:NZ)
+    real(8), allocatable :: Xc(:, :, :), Yc(:, :, :), Zc(:, :, :)
+    real(8), allocatable :: Uc(:, :, :), Vc(:, :, :), Wc(:, :, :)
+    real(8), allocatable :: Fxc(:, :, :), Fyc(:, :, :), Fzc(:, :, :)
     real(8) Ua(0:NX+1, 0:NY+1, 0:NZ+1), Va(0:NX+1, 0:NY+1, 0:NZ+1), Wa(0:NX+1, 0:NY+1, 0:NZ+1)
-    real(8) Fxc(1:NC, 1:NL, 1:NZ), Fyc(1:NC, 1:NL, 1:NZ), Fzc(1:NC, 1:NL, 1:NZ)
     real(8) fxint(1:NX, 1:NY, 1:NZ), fyint(1:NX, 1:NY, 1:NZ), fzint(1:NX, 1:NY, 1:NZ)
     integer s
     integer step
@@ -1906,7 +2283,6 @@ program main
     real(8) total_time, t_start, t_end, others_time
     ! real(8) Ep(1:NX, 1:NY, 1:NZ)
     ! integer i, j, k
-    call mk_dir(dir)
     call cpu_time(t_start)
     t12 = 0.0d0
     t23 = 0.0d0
@@ -1914,9 +2290,10 @@ program main
     t45 = 0.0d0
 
     call init(U, V, W, P, Phi, C, Fx, Fy, Fz)
-    if (input_step > 0) call input(U, V, W, P, C)
-    if (method == 2) call ibm_init(X, Y, Z, Xc, Yc, Zc, Uc, Vc, Wc)
-    if (method == 2) call ibm_get(Xc, Yc) 
+    if (input_step > 0) call input(U, V, W, P, C, Ax0, Ay0, Az0, Tx0, Ty0, Tz0)
+    if (method == 2) call ibm_init(X, Y, Z, Xc, Yc, Zc, Uc, Vc, Wc, Fxc, Fyc, Fzc)
+    if (method == 2) call ibm_vtk(Xc, Yc, Zc)
+    ! if (method == 2) call ibm_get(Xc, Yc)
     ! call get_data(U, V, W, 0)
     ! call get_data_xy(U, V, W, C, 0)
     ! call get_data_xz(U, V, W, C, 50000)
@@ -1930,19 +2307,26 @@ program main
     ! write(*, *) sum(Ep)/(NX*NY*NZ)
     
     do step = 1, Nstep
-        eigen_method = 0
-        ! if (mod(step, 100)==0) eigen_method = 0  ! 0:カルダノ、1:シルベスター
         call cpu_time(t1)
-        call CpxCnx(C, Cpx, Cnx)
-        call CpyCny(C, Cpy, Cny)
-        call CpzCnz(C, Cpz, Cnz)
+        if (beta == 1.0d0) then
+            C(:, :, :, :) = 0.0d0
+            Tx(:, :, :) = 0.0d0
+            Ty(:, :, :) = 0.0d0
+            Tz(:, :, :) = 0.0d0
+            call cpu_time(t2)
+            call cpu_time(t3)
+        else
+            call CpxCnx(C, Cpx, Cnx)
+            call CpyCny(C, Cpy, Cny)
+            call CpzCnz(C, Cpz, Cnz)
 
-        call cpu_time(t2)
-        call Cstar(Cpx, Cnx, Cpy, Cny, Cpz, Cnz, U, V, W, Cx)
-        call Lyapunov(Cx, U, V, W, C)
-        call cpu_time(t3)
+            call cpu_time(t2)
+            call Cstar(Cpx, Cnx, Cpy, Cny, Cpz, Cnz, U, V, W, Cx)
+            call Lyapunov(Cx, U, V, W, C)
+            call cpu_time(t3)
 
-        call polymer_stress(C, Tx, Ty, Tz)
+            call polymer_stress(C, Tx, Ty, Tz)
+        endif
         call convection(U, V, W, Ax, Ay, Az)
         call viscous(U, V, W, Bx, By, Bz)
 
@@ -1965,10 +2349,8 @@ program main
         if (method == 2) then
             call ibm_preliminary(U, V, W, P, Ax, Ay, Az, Ax0, Ay0, Az0, Bx, By, Bz, Tx, Ty, Tz, Tx0, Ty0, Tz0, &
                                  Ua, Va, Wa, Fxc, Fyc, Fzc, Up, Vp, Wp, step)
-            do s = 1, NS
-                call ibm_Helmholtz(Up, Vp, Wp, X, Y, Z, Xc, Yc, Zc, Uc, Vc, Wc, Fxc, Fyc, Fzc, fxint, fyint, fzint)
-                call ibm_predict(Ua, Va, Wa, fxint, fyint, fzint, Bx, By, Bz, Up, Vp, Wp)
-            enddo
+            call ibm_Helmholtz(Up, Vp, Wp, X, Y, Z, Xc, Yc, Zc, Uc, Vc, Wc, Fxc, Fyc, Fzc, fxint, fyint, fzint)
+            call ibm_predict(Ua, Va, Wa, fxint, fyint, fzint, Bx, By, Bz, Up, Vp, Wp)
             call cpu_time(t4)
             call fft_poisson(Up, Vp, Wp, Phi)
             call fft_march(Up, Vp, Wp, U, V, W, Phi, P)
@@ -1984,11 +2366,15 @@ program main
         call cpu_time(t5)
         
         call logging(U, V, W, C, step, t_start)
+        if (mod(step, Gstep)==0) call vtk_binary(U, V, W, step)
+        ! if (mod(step, Gstep)==0) call vtk_ascii(U, V, W, 1000)
         ! if (mod(step, Gstep)==0) call get_data(U, V, W, C, step)
+        ! if (mod(step, Gstep)==0) call get_data_xy(U, V, W, C, step)
         ! if (mod(step, Gstep)==0) call get_data_xz(U, V, W, C, step)
-        if (mod(step, Gstep)==0) call taylor_debag(U, V, W, step)
-        ! if (mod(step, Estep)==0) call energy_single(U, V, W, step)
-        if (mod(step, output_step)==0) call output(U, V, W, P, C, step)
+        if (mod(step, Gstep)==0) call get_data_binary(U, V, W, C, step)
+        if (mod(step, Gstep)==0 .and. flow_type == 4) call taylor_debug(U, V, W, step)
+        if (mod(step, Estep)==0) call energy_single(U, V, W, step)
+        if (mod(step, output_step)==0) call output(U, V, W, P, C, Ax, Ay, Az, Tx, Ty, Tz, step)
         if (sum(U**2)*0.0d0 /= 0.0d0) stop 'NaN value'  ! NaNの判定
         t12 = t12 + t2-t1
         t23 = t23 + t3-t2
@@ -2007,10 +2393,6 @@ program main
     write(*, '(a9, F10.3, a3, F8.3, a3)') 'Poisson :', t45, '[s]', t45/total_time*100, '[%]'
     write(*, '(a9, F10.3, a3, F8.3, a3)') 'Others  :', others_time, '[s]', others_time/total_time*100, '[%]'
 
-    ! open(10, file = 'debag3.d', position='append')
-    ! write(10, *) NX, total_time
-    ! close(10)
-    ! write(*, *) NX, total_time
     
 end program main
 

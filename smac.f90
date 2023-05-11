@@ -2,39 +2,37 @@ module smac
     implicit none
     ! gfortran smac.f90 -I$HOME/local/include -L$HOME/local/lib -lfftw3 && ./a.out
     ! ステップ数
-    integer, parameter :: Nstep = 1
+    integer, parameter :: Nstep = 10
     integer, parameter :: Gstep = 10000  ! データを取得する間隔
     integer, parameter :: Estep = 10000  ! エネルギースペクトルを取得する間隔
-    integer, parameter :: Dstep = 10  ! デバッグする間隔
-    character(*), parameter :: dir = './ibm_old/'
+    integer, parameter :: Dstep = 1  ! デバッグする間隔
     integer, parameter :: input_step = 0  ! 0以外で初期条件をファイルから読み込む
     integer, parameter :: output_step = 5000  ! 配列を保存する間隔
-    ! 手法
-    integer, parameter :: method = 2  ! 0:陽解法、1:FFT、2:IBM，3:時間平均エネルギーカスケード
     real(8), parameter :: PI = acos(-1.0d0)
     ! パラメータ
-    integer, parameter :: NX = 128, NY = NX, NZ = NX
+    integer, parameter :: NX = 144, NY = NX, NZ = NX
     real(8), parameter :: dX = 2*PI/NX, dY = 2*PI/NY, dZ = 2*PI/NZ  ! 規格化長さは2*PI
     real(8), parameter :: dt = 0.00008d0
-
-    ! method = 1
-    ! real(8), parameter :: Re = 5655.0d0
-    ! real(8), parameter :: L_C = 1.0d0  ! 長さが100なら100/2*PI
-    ! real(8), parameter :: U_C = 1.0d0  ! 本来は乱流テイラーグリーン渦の平均流の速さ  ! ibmでの円柱回転速度
-    ! real(8), parameter :: nu = L_C*U_C/Re
-
-    ! method = 2
-    real(8), parameter :: L_C = 8.0d0 * 0.03d0 / (2.0d0*PI)
-    ! real(8), parameter :: D_C = 0.03d0
-    real(8), parameter :: U_C = 0.06d0 * PI
-    real(8), parameter :: nu = 1.0d-6
+    ! 手法
+    integer, parameter :: method = 2  ! 0:陽解法、1:FFT、2:IBM、3:時間平均エネルギーカスケード
+    integer, parameter :: NC = 4  ! 1:円柱1つ、4:実験装置
+    real(8), parameter :: DC = 2*PI/6.0d0  ! 円柱直径: 2*PI/8.0d0 or 2*PI/6.0d0
+    integer, parameter :: NS = 1  ! 反復回数
+    ! 実験と同様のパラメータ
+    integer, parameter :: f_C = 2  ! 円柱回転速度[rps]
+    real(8), parameter :: D_C = 0.03d0  ! 円柱直径[m]
+    real(8), parameter :: U_C = f_C * PI * D_C  ! 代表速度
+    real(8), parameter :: L_C = D_C / DC  ! 代表長さ
+    real(8), parameter :: nu = 1.0d-6  ! 動粘性係数
     real(8), parameter :: Re = U_C*L_C/nu
-
+    ! その他のパラメータ
     real(8), parameter :: f0 = 1.0d0  ! 無次元化したときに1となるように
     real(8), parameter :: dX_C = dX*L_C, dY_C = dY*L_C, dZ_C = dZ*L_C
     real(8), parameter :: dt_C = dt*L_C/U_C
     ! real(8), parameter :: f0 = L_C/(U_C)**2 ! 外力を1に固定し，無次元化するときの定数
 
+    ! その他
+    character(*), parameter :: dir = './debug_smac/'
     ! エネルギーカスケード
     ! integer, parameter :: NE = 1000  ! 時間平均反復回数
 
@@ -49,12 +47,12 @@ contains
         if (method == 0) then
             write(*, '(a, F8.3, F8.3, F8.3, a8)') 'Von Neumann:', 1.0d0/Re*dt/dX**2, 1.0d0/Re*dt/dY**2, 1.0d0/Re*dt/dZ**2, '< 0.167'
         endif
-        write(*, '(a, F8.3, F8.3, F8.3, a8)') 'CFL:', 1.0d0*dt/dX, 1.0d0*dt/dY, 1.0d0*dt/dZ,'< 0.167'
+        write(*, '(a, F8.3, F8.3, F8.3, a8)') 'CFL:', 1.0d0*dt/dX*6.0d0, 1.0d0*dt/dY*6.0d0, 1.0d0*dt/dZ*6.0d0,'< 1.0'
         write(*, '(a, F8.3)') 'L_C =', L_C
-        ! write(*, '(a, F8.3)') 'D_C =', D_C
+        write(*, '(a, F8.3)') 'D_C =', D_C
         write(*, '(a, F8.3)') 'U_C =', U_C
         write(*, '(a, E12.4)') 'nu =', nu
-        write(*, '(a, F8.3)') 'Re  =', Re
+        write(*, '(a, F9.3)') 'Re  =', Re
         write(*, '(a, E12.4)') 'dt_C =', dt_C
 
         ! 初期条件（Taylor-Green）
@@ -72,21 +70,25 @@ contains
         Fx(:, :, :) = 0.0d0
         Fy(:, :, :) = 0.0d0
         Fz(:, :, :) = 0.0d0
-        do k = 1, NZ
-            do j = 1, NY
-                do i = 1, NX
-                    ! U(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)
-                    ! V(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
+        if (method == 0 .and. method == 1) then
+            do k = 1, NZ
+                do j = 1, NY
+                    do i = 1, NX
+                        ! U(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)  ! テイラー渦
+                        ! V(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
 
-                    ! Fx(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY) * cos((k-0.5d0)*dZ)  ! 荒木さん
-                    ! Fy(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY) * cos((k-0.5d0)*dZ)
-                    Fx(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)  ! 増田さん, 安房井さん
-                    Fy(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
-                    ! Fx(i, j, k) = -sin(large_K*(j-0.5d0)*dY)  ! 小井手さん
-                    ! Fy(i, j, k) = sin(large_K*(i-0.5d0)*dX)
+                        ! Fx(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY) * cos((k-0.5d0)*dZ)  ! 荒木さん
+                        ! Fy(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY) * cos((k-0.5d0)*dZ)
+                        Fx(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)  ! 増田さん, 安房井さん
+                        Fy(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
+                        ! Fx(i, j, k) = -sin(i*dX) * cos((k-0.5d0)*dZ)  ! x, z 増田さん, 安房井さん
+                        ! Fz(i, j, k) = cos((i-0.5d0)*dX) * sin(k*dZ)
+                        ! Fx(i, j, k) = -sin(large_K*(j-0.5d0)*dY)  ! 小井手さん
+                        ! Fy(i, j, k) = sin(large_K*(i-0.5d0)*dX)
+                    enddo
                 enddo
             enddo
-        enddo
+        endif
         Fx(:, :, :) = f0 * Fx(:, :, :)
         Fy(:, :, :) = f0 * Fy(:, :, :)
         Fz(:, :, :) = f0 * Fz(:, :, :)
@@ -606,10 +608,15 @@ contains
             K_energy = sum(U(1:NX, 1:NY, 1:NZ)**2) + sum(V(1:NX, 1:NY, 1:NZ)**2) + sum(W(1:NX, 1:NY, 1:NZ)**2)
             K_energy = K_energy*U_C**2/2
             K_energy = K_energy/(NX*NY*NZ)
+
             write(*, '(a, e12.4)', advance='no') '  | K_energy:', K_energy
             write(*, '(a, e12.4)', advance='no') '  | Re_lamda:', Re_lamda
             write(*, '(a, e12.4)', advance='no') '  | epsilon:', epsilon
             write(*, '(a, e12.4)', advance='no') '  | eta:', eta
+
+            ! CFL条件
+            write(*, '(a, e12.4)', advance='no') &
+            '  | CFL:', max(maxval(U(:, :, :))*dt/dX, maxval(V(:, :, :))*dt/dY, maxval(W(:, :, :))*dt/dY)*6.0d0
 
             call cpu_time(t_temp)
             t_pre = int((t_temp-t_start)*(Nstep-step)/step)
@@ -1118,9 +1125,6 @@ module ibm
     use fft
     implicit none
     ! IBM用パラメータ
-    real(8), parameter :: DC = 2*PI/8.0d0  ! 円柱直径
-    integer, parameter :: NC = 4  ! 円柱の個数
-    integer, parameter :: NS = 1  ! 反復回数
     integer, parameter :: NL = nint(PI*DC/dX)  ! 円周方向の分割数
     real(8), parameter :: dV = PI*DC/NL * dX * dX
 contains
@@ -1150,16 +1154,29 @@ contains
 
         ! 円柱上の座標
         if (NC == 4) then
-            do j = 1, NL
-                Xc(1, j, :) = 2*PI* 5/16 + DC/2 * cos(2*PI/NL*j)
-                Yc(1, j, :) = 2*PI* 5/16 + DC/2 * sin(2*PI/NL*j)
-                Xc(2, j, :) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
-                Yc(2, j, :) = 2*PI* 5/16 + DC/2 * sin(2*PI/NL*j)
-                Xc(3, j, :) = 2*PI* 5/16 + DC/2 * cos(2*PI/NL*j)
-                Yc(3, j, :) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
-                Xc(4, j, :) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
-                Yc(4, j, :) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
-            enddo
+            if (DC == 2*PI/8.0d0) then
+                do j = 1, NL
+                    Xc(1, j, :) = 2*PI* 5/16 + DC/2 * cos(2*PI/NL*j)
+                    Yc(1, j, :) = 2*PI* 5/16 + DC/2 * sin(2*PI/NL*j)
+                    Xc(2, j, :) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
+                    Yc(2, j, :) = 2*PI* 5/16 + DC/2 * sin(2*PI/NL*j)
+                    Xc(3, j, :) = 2*PI* 5/16 + DC/2 * cos(2*PI/NL*j)
+                    Yc(3, j, :) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
+                    Xc(4, j, :) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
+                    Yc(4, j, :) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
+                enddo
+            else if (DC == 2*PI/6.0d0) then
+                do j = 1, NL
+                    Xc(1, j, :) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
+                    Yc(1, j, :) = 2*PI/4 + DC/2 * sin(2*PI/NL*j)
+                    Xc(2, j, :) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
+                    Yc(2, j, :) = 2*PI/4 + DC/2 * sin(2*PI/NL*j)
+                    Xc(3, j, :) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
+                    Yc(3, j, :) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
+                    Xc(4, j, :) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
+                    Yc(4, j, :) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
+                enddo
+            endif
         else if (NC == 1) then
             do j = 1, NL
                 Xc(1, j, :) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
@@ -1179,14 +1196,14 @@ contains
         Wc(:, :, :) = 0.0d0
         if (NC == 4) then
             do j = 1, NL
-                Uc(1, j, :) = -sin(2*PI/NL*j)  ! 代表速度は出力時にかける
-                Vc(1, j, :) = cos(2*PI/NL*j)
-                Uc(2, j, :) = sin(2*PI/NL*j)
-                Vc(2, j, :) = -cos(2*PI/NL*j)
-                Uc(3, j, :) = sin(2*PI/NL*j)
-                Vc(3, j, :) = -cos(2*PI/NL*j)
-                Uc(4, j, :) = -sin(2*PI/NL*j)
-                Vc(4, j, :) = cos(2*PI/NL*j)
+                Uc(1, j, :) = sin(2*PI/NL*j)  ! 代表速度は出力時にかける
+                Vc(1, j, :) = -cos(2*PI/NL*j)
+                Uc(2, j, :) = -sin(2*PI/NL*j)
+                Vc(2, j, :) = cos(2*PI/NL*j)
+                Uc(3, j, :) = -sin(2*PI/NL*j)
+                Vc(3, j, :) = cos(2*PI/NL*j)
+                Uc(4, j, :) = sin(2*PI/NL*j)
+                Vc(4, j, :) = -cos(2*PI/NL*j)
             enddo
         endif
     end subroutine ibm_init

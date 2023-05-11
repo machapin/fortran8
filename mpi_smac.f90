@@ -9,27 +9,36 @@ module smac
     integer, parameter :: Gstep =   40000  ! データを取得する間隔
     integer, parameter :: Estep =   40000  ! エネルギースペクトルを取得する間隔
     integer, parameter :: Dstep =    10  ! デバッグする間隔
-    character(*), parameter :: dir = './'
     integer, parameter :: input_step = 0  ! 0以外で初期条件をファイルから読み込む
     integer, parameter :: output_step = 40000  ! 配列を保存する間隔
-    ! 手法
-    integer, parameter :: method = 1  ! 0:陽解法、1:FFT，2:IBM, 3:実験と比較(inputを0以外に)
     real(8), parameter :: PI = acos(-1.0d0)
     ! パラメータ
-    integer, parameter :: NX = 128, NY = NX, NZ = NX
+    integer, parameter :: NX = 192, NY = NX, NZ = NX
     real(8), parameter :: dX = 2*PI/NX, dY = 2*PI/NY, dZ = 2*PI/NZ  ! 規格化長さは2*PI
     real(8), parameter :: dt = 0.0004d0
-    ! 無次元パラメータ
-    real(8), parameter :: Re = 14000.0d0
-    ! 有次元パラメータ
-    real(8), parameter :: L_C = 1.0d0  ! 長さが100なら100/(2*PI)
-    real(8), parameter :: U_C = 1.0d0  ! 本来は乱流テイラーグリーン渦の平均流の速さ
-    ! real(8), parameter :: L_C = 8.0d0 * 0.03d0 / (2.0d0*PI)
-    ! real(8), parameter :: U_C = Re/0.03d0*1.0d-6  ! L_Cは直径ではなく系の長さ．つまり代表長さではない
+    ! 手法
+    integer, parameter :: method = 2  ! 0:陽解法、1:FFT、2:IBM、3:IBM定量的に比較(inputを0以外に)
+    integer, parameter :: ibm_type = 21  ! 11:円柱表面1つ、12:円柱表面4つ(直径:2*PI/8.0d0)、13:円柱表面4つ(直径:2*PI/6.0d0)、21:円柱内部4つ(直径:2*PI/6.0d0)
+    integer, parameter :: flow_type = 0  ! 0:外力なし(f=0)、3:テイラーグリーン外力、4:テイラーグリーン渦の減衰
+    ! ! 無次元パラメータ
+    ! real(8), parameter :: Re = 14000.0d0
+    ! ! 有次元パラメータ
+    ! real(8), parameter :: L_C = 1.0d0  ! 長さが100なら100/(2*PI)
+    ! real(8), parameter :: U_C = 1.0d0  ! 本来は乱流テイラーグリーン渦の平均流の速さ
+    ! 実験と同様のパラメータ
+    integer, parameter :: f_C = 2  ! 円柱回転速度[rps]
+    real(8), parameter :: D_C = 0.03d0  ! 円柱直径[m]
+    real(8), parameter :: U_C = f_C * PI * D_C  ! 代表速度
+    real(8), parameter :: L_C = D_C / DC  ! 代表長さ
+    real(8), parameter :: nu = 1.0d-6  ! 動粘性係数
+    real(8), parameter :: Re = U_C*L_C/nu
+
     real(8), parameter :: f0 = 1.0d0  ! 無次元化したときに1となるように
     real(8), parameter :: dX_C = dX*L_C, dY_C = dY*L_C, dZ_C = dZ*L_C
     real(8), parameter :: dt_C = dt*L_C/U_C
     real(8), parameter :: nu = L_C*U_C/Re
+    ! その他
+    character(64) :: dir = './data/'
 
     ! MPI用変数
     integer N_procs
@@ -37,6 +46,7 @@ module smac
     integer next_rank, former_rank
     integer req1s, req1r, req2s, req2r
     integer, dimension(MPI_STATUS_SIZE) :: sta1s, sta1r, sta2s, sta2r
+    integer seed, seeds(2)  ! 乱数
 
 contains
     subroutine init(U_procs, V_procs, W_procs, P_procs, Phi_procs, &
@@ -56,60 +66,39 @@ contains
         real(8) Fx(1:NX, 1:NY, 1:NZ), Fy(1:NX, 1:NY, 1:NZ), Fz(1:NX, 1:NY, 1:NZ)
         integer i, j, k
         real(8), parameter :: large_K = 2.0d0
+        character(2) str
+        write(str, '(I2.2)') ibm_type
+
+        ! if (method == 1) dir = trim(dir)//'fft'
+        ! if (method == 2) dir = trim(dir)//'ibm'//str
+        ! if (method == 3) dir = trim(dir)//'ibm_evaluation'
+        ! if (flow_type == 3) dir = trim(dir)//'_taylor'
+        ! if (flow_type == 4) dir = trim(dir)//'_taylor_decay'
+        ! if (beta == 1.0d0) dir = trim(dir)//'_newton'
+        ! dir = trim(dir)//'/'
+        if (myrank == 0) write(*, '(a, a)') 'dir:  ', dir
+        call mk_dir(dir)
 
         ! コメント
         N_procs = NZ / procs
         if (mod(NZ, procs)/=0 .or. mod(NY, procs)/=0) stop 'NZ or NY is not divisible by procs'
         ! if (1.0d0*dt/dX>1.0d0/6 .or. 1.0d0*dt/dY>1.0d0/6 .or. 1.0d0*dt/dZ>1.0d0/6) stop 'CFL condition is not met.'
         if (myrank == 0) then
-            write(*, '(a, F8.3, F8.3, F8.3)') 'CFL:', 1.0d0*dt/dX, 1.0d0*dt/dY, 1.0d0*dt/dZ
+            write(*, '(a, F8.3, F8.3, F8.3)') 'CFL:', 1.0d0*dt/dX*6.0d0, 1.0d0*dt/dY*6.0d0, 1.0d0*dt/dZ*6.0d0
             ! write(*, '(a, F8.3)') 'U_C =', U_C
-            ! write(*, '(a, F8.3)') 'Re  =', Re
+            ! write(*, '(a, F9.3)') 'Re  =', Re
             ! write(*, '(a, E12.4)') 'dt  =', dt
             ! write(*, '(a, E12.4)') 'nu  =', nu
             write(*, *) 'procs:', procs
         endif
 
-        ! 初期条件
-        if (myrank == 0) then
-            U(:, :, :) = 0.0d0
-            V(:, :, :) = 0.0d0
-            W(:, :, :) = 0.0d0
-            call random_number(U)
-            call random_number(V)
-            call random_number(W)
-            U(:, :, :) = 0.001d0 * (U(:, :, :)-0.5d0)
-            V(:, :, :) = 0.001d0 * (V(:, :, :)-0.5d0)
-            W(:, :, :) = 0.001d0 * (W(:, :, :)-0.5d0)
-            P(:, :, :) = 0.0d0
-            Phi(:, :, :) = 0.0d0
-            Fx(:, :, :) = 0.0d0
-            Fy(:, :, :) = 0.0d0
-            Fz(:, :, :) = 0.0d0
-            do k = 1, NZ
-                do j = 1, NY
-                    do i = 1, NX
-                        ! U(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)
-                        ! V(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
-                        ! U(i, j, k) = -sin(i*dX) * cos((k-0.5d0)*dZ)
-                        ! W(i, j, k) = cos((i-0.5d0)*dX) * sin(k*dZ)
-
-                        ! Fx(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY) * cos((k-0.5d0)*dZ)  ! 荒木さん
-                        ! Fy(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY) * cos((k-0.5d0)*dZ)
-                        Fx(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)  ! 増田さん, 安房井さん
-                        Fy(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
-                        ! Fx(i, j, k) = -sin(large_K*(j-0.5d0)*dY)  ! 小井手さん
-                        ! Fy(i, j, k) = sin(large_K*(i-0.5d0)*dX)
-                    enddo
-                enddo
-            enddo
-            Fx(:, :, :) = f0 * Fx(:, :, :)
-            Fy(:, :, :) = f0 * Fy(:, :, :)
-            Fz(:, :, :) = f0 * Fz(:, :, :)
-        endif
-
+        ! 乱数用
+        call system_clock(seed)  ! 現在時刻をシード値として使用する
+        seed = seed + myrank  ! プロセスごとにシード値を変える
+        seeds(1:2) = [seed, 0]
+        call random_seed(put=seeds)  ! 入力するシード値は配列
+        
         ! 配列のallocate
-        N_procs = NZ / procs
         allocate(U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1))
         allocate(P_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Phi_procs(0:NX+1, 0:NY+1, 0:N_procs+1))
         allocate(Ax_procs(1:NX, 1:NY, 1:N_procs), Ay_procs(1:NX, 1:NY, 1:N_procs), Az_procs(1:NX, 1:NY, 1:N_procs))
@@ -118,16 +107,45 @@ contains
         allocate(Bx0_procs(1:NX, 1:NY, 1:N_procs), By0_procs(1:NX, 1:NY, 1:N_procs), Bz0_procs(1:NX, 1:NY, 1:N_procs))
         allocate(Up_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Vp_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Wp_procs(0:NX+1, 0:NY+1, 0:N_procs+1))
         allocate(Fx_procs(1:NX, 1:NY, 1:N_procs), Fy_procs(1:NX, 1:NY, 1:N_procs), Fz_procs(1:NX, 1:NY, 1:N_procs))
-        
-        ! 初期条件を全プロセスに通信
-        call MPI_Scatter(U(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, U_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-        call MPI_Scatter(V(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, V_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-        call MPI_Scatter(W(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, W_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-        call MPI_Scatter(P(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, P_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-        call MPI_Scatter(Phi(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, Phi_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-        call MPI_Scatter(Fx(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Fx_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-        call MPI_Scatter(Fy(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Fy_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-        call MPI_Scatter(Fz(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Fz_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
+
+        ! 初期条件
+        ! U_procs(:, :, :) = 0.0d0
+        ! V_procs(:, :, :) = 0.0d0
+        ! W_procs(:, :, :) = 0.0d0
+        call random_number(U_procs)
+        call random_number(V_procs)
+        call random_number(W_procs)
+        U_procs(:, :, :) = 0.001d0 * (U_procs(:, :, :)-0.5d0)
+        V_procs(:, :, :) = 0.001d0 * (V_procs(:, :, :)-0.5d0)
+        W_procs(:, :, :) = 0.001d0 * (W_procs(:, :, :)-0.5d0)
+        P_procs(:, :, :) = 0.0d0
+        Phi_procs(:, :, :) = 0.0d0
+        Fx_procs(:, :, :) = 0.0d0
+        Fy_procs(:, :, :) = 0.0d0
+        Fz_procs(:, :, :) = 0.0d0
+        if (method == 0 .and. method == 1) then
+            do k = 1, N_procs
+                do j = 1, NY
+                    do i = 1, NX
+                        ! U_procs(i, j, k) = -U_C * sin(i*dX) * cos((j-0.5d0)*dY)
+                        ! V_procs(i, j, k) = U_C * cos((i-0.5d0)*dX) * sin(j*dY)
+
+                        ! Fx_procs(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY) * cos((myrank*N_procs + k-0.5d0)*dZ)  ! 荒木さん
+                        ! Fy_procs(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY) * cos((myrank*N_procs + k-0.5d0)*dZ)
+                        Fx_procs(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)  ! 増田さん, 安房井さん
+                        Fy_procs(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
+                        ! Fx_procs(i, j, k) = -sin(i*dX) * cos((myrank*N_procs+k-0.5d0)*dZ)  ! x, z 増田さん, 安房井さん
+                        ! Fz_procs(i, j, k) = cos((i-0.5d0)*dX) * sin((myrank*N_procs+k)*dZ)
+                        ! Fx_procs(i, j, k) = -sin(large_K*(j-0.5d0)*dY)  ! 小井手さん
+                        ! Fy_procs(i, j, k) = sin(large_K*(i-0.5d0)*dX)
+                    enddo
+                enddo
+            enddo
+        endif
+        Fx_procs(:, :, :) = f0 * Fx_procs(:, :, :)
+        Fy_procs(:, :, :) = f0 * Fy_procs(:, :, :)
+        Fz_procs(:, :, :) = f0 * Fz_procs(:, :, :)
+
 
         ! のりしろ境界の通信先
         next_rank = myrank + 1  ! 送るランク
@@ -402,7 +420,7 @@ contains
         call MPI_Allreduce(er0, er, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
         
         if (myrank == 0) then
-            open(20, file = './mpi_dat/debag_smac.d', position='append')
+            open(20, file = './mpi_dat/debug_smac.d', position='append')
             write(20, '(a, I6, a, I6, a, E12.4, a, E12.4, a, E12.4)') 'step:', step, '  itr:', itr, '  er_sum:', er_sum, '  er0_sum:', er0_sum, '  Phi_sum:', er
             close(20)
         endif
@@ -452,51 +470,6 @@ contains
         call PBM(W_procs)
         call PBM(P_procs)
     end subroutine march
-
-    subroutine taylor_debag(U_procs, V_procs, W_procs, step)
-        real(8), intent(in) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
-        integer, intent(in) :: step
-        integer i, j, k
-        real(8) err
-        real(8) U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
-        real(8) U0(0:NX+1, 0:NY+1, 0:NZ+1), V0(0:NX+1, 0:NY+1, 0:NZ+1), W0(0:NX+1, 0:NY+1, 0:NZ+1)
-        character(8) str
-        write(str, '(I8.8)') step  ! 数値を文字列に変換
-
-        call MPI_Gather(U_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, U(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-        call MPI_Gather(V_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, V(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-        call MPI_Gather(W_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, W(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-        
-        if (myrank == 0) then
-            U0(:, :, :) = 0.0d0
-            V0(:, :, :) = 0.0d0
-            W0(:, :, :) = 0.0d0
-            do k = 1, NZ
-                do j = 1, NY
-                    do i = 1, NX
-                        ! U0(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)
-                        ! V0(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
-                        U0(i, j, k) = -sin(i*dX) * cos((k-0.5d0)*dZ)
-                        W0(i, j, k) = cos((i-0.5d0)*dX) * sin(k*dZ)
-                    enddo
-                enddo
-            enddo
-            U0(:, :, :) = U0(:, :, :) * exp(-2.0d0/Re*step*dt)  ! 解析解
-            V0(:, :, :) = V0(:, :, :) * exp(-2.0d0/Re*step*dt)
-            W0(:, :, :) = W0(:, :, :) * exp(-2.0d0/Re*step*dt)
-
-            ! i = NX/4
-            ! j = NY/4
-            ! k = NZ/4
-            err = (sum((U0(1:NX, 1:NY, 1:NZ)-U(1:NX, 1:NY, 1:NZ))**2) &
-                  +sum((V0(1:NX, 1:NY, 1:NZ)-V(1:NX, 1:NY, 1:NZ))**2) &
-                  +sum((W0(1:NX, 1:NY, 1:NZ)-W(1:NX, 1:NY, 1:NZ))**2))/(NX*NY*NZ)
-            open(10, file=dir//'taylor_debag.d', position='append')
-            ! write(10, *) step, U0(i, j, k), U(i, j, k), U0(i, j, k) - U(i, j, k), sqrt(err)
-            write(10, *) step, sqrt(err)
-            close(10)
-        endif
-    end subroutine taylor_debag
     
     
     subroutine get_data(U_procs, V_procs, W_procs, step)
@@ -544,7 +517,7 @@ contains
                         E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
                         E(3) = (W(i, j, k-1)+W(i, j, k))/2*U_C
                         Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
-                        write(30, '(11e12.4)') (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, &
+                        write(30, *) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, &
                                                E(1), E(2), E(3), &
                                                Omega(3), sum(Omega**2)/2, sum(S**2)/2, sum(E**2)/2, Qti
                     enddo
@@ -578,7 +551,7 @@ contains
                     E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
                     E(3) = (W(i, j, k-1)+W(i, j, k))/2*U_C
                     Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
-                    write(10, '(11e12.4)') (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, &
+                    write(10, *) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, &
                                            E(1), E(2), E(3), &
                                            Omega(3), sum(Omega**2)/2, sum(S**2)/2, sum(E**2)/2, Qti
                 enddo
@@ -611,7 +584,7 @@ contains
                     E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
                     E(3) = (W(i, j, k-1)+W(i, j, k))/2*U_C
                     Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
-                    write(20, '(11e12.4)') (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, &
+                    write(20, *) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, &
                                            E(1), E(2), E(3), &
                                            Omega(2), sum(Omega**2)/2, sum(S**2)/2, sum(E**2)/2, Qti
                 enddo
@@ -715,7 +688,7 @@ contains
             if (myrank == 0 .and. K_energy_sum*0.0d0 /= 0.0d0) stop 'NaN value'  ! NaNの判定
 
             if (myrank == 0) then
-                open(30, file = dir//'debag_energy2.d', position='append')
+                open(30, file = dir//'all_time.d', position='append')
                 write(30, *) step*dt_C, K_energy_sum, Re_lamda, epsilon, eta
                 close(30)
             endif
@@ -725,6 +698,8 @@ contains
             if (myrank == 0) then
                 write(*, '(a, I7)', advance='no') 'step:', step
                 write(*, '(a, e12.4)', advance='no') '  | K_energy:', K_energy_sum
+                write(*, '(a, e12.4)', advance='no') &
+                '  | CFL:', max(maxval(U(:, :, :))*dt/dX, maxval(V(:, :, :))*dt/dY, maxval(W(:, :, :))*dt/dY)*6.0d0
 
                 time0 = MPI_Wtime()
                 time2 = int((time0-time1)*(Nstep-step)/step)
@@ -1268,11 +1243,8 @@ module ibm
     use fft
     implicit none
     ! IBM用パラメータ
-    real(8), parameter :: DC = 2*PI/8.0d0  ! 円柱直径
-    integer, parameter :: NC = 4  ! 円柱の個数
-    integer, parameter :: NS = 1  ! 反復回数
-    integer, parameter :: NL = nint(PI*DC/dX)  ! 円周方向の分割数
-    real(8), parameter :: dV = PI*DC/NL * dX * dX
+    integer NC, NL
+    real(8) DC, dV
 contains
     subroutine ibm_init(X_procs, Y_procs, Z_procs, Xc_procs, Yc_procs, Zc_procs, Uc_procs, Vc_procs, Wc_procs, &
                         Ua_procs, Va_procs, Wa_procs, Fxc_procs, Fyc_procs, Fzc_procs, fxint_procs, fyint_procs, fzint_procs)
@@ -1283,6 +1255,41 @@ contains
         real(8), allocatable :: Fxc_procs(:, :, :), Fyc_procs(:, :, :), Fzc_procs(:, :, :)
         real(8), allocatable :: fxint_procs(:, :, :), fyint_procs(:, :, :), fzint_procs(:, :, :)
         integer i, j, k
+        integer index
+        integer NL_lap  ! 円柱内部の殻数
+        integer, allocatable :: NL_shell(:)  ! 殻に対する外力点の数
+
+        if (ibm_type == 11) then  ! 円柱表面1つ
+            NC = 1
+            DC = 2*PI/6.0d0
+            NL = nint(PI*DC/dX)
+            dV = PI*DC/NL * dX * dX
+        endif
+        if (ibm_type == 12) then  ! 円柱表面4つ(直径:2*PI/8.0d0)
+            NC = 4
+            DC = 2*PI/8.0d0
+            NL = nint(PI*DC/dX)
+            dV = PI*DC/NL * dX * dX
+        endif
+        if (ibm_type == 13) then  ! 円柱表面4つ(直径:2*PI/6.0d0)
+            NC = 4
+            DC = 2*PI/6.0d0
+            NL = nint(PI*DC/dX)
+            dV = PI*DC/NL * dX * dX
+        endif
+        if (ibm_type == 21) then  ! 円柱内部4つ(直径:2*PI/6.0d0)
+            NC = 4
+            DC = 2*PI/6.0d0
+            NL_lap = int(DC/(2*dX))  ! 円柱内部の殻数
+            allocate(NL_shell(0:NL_lap))
+            do i = 0, NL_lap
+                NL_shell(i) = nint(PI*(DC-2*i*dX)/dX)
+            enddo
+            if (NL_shell(NL_lap) == 0) NL_shell(NL_lap) = 1  ! 中心に外力点を1つ置く
+            NL = sum(NL_shell)
+            dV = PI*(DC+dX)**2/4 / NL * dX
+            if (myrank == 0) write(*, '(a, 100I5)') 'NL_shell:  ', NL_shell(:)
+        endif
 
         ! コメント
         if (dX /= dY .or. dX /= dZ) stop 'dX, dY and dZ are not equal'
@@ -1298,7 +1305,7 @@ contains
         allocate(Xc_procs(1:NC, 1:NL, 1:N_procs), Yc_procs(1:NC, 1:NL, 1:N_procs), Zc_procs(1:NC, 1:NL, 1:N_procs))
         allocate(Uc_procs(1:NC, 1:NL, 1:N_procs), Vc_procs(1:NC, 1:NL, 1:N_procs), Wc_procs(1:NC, 1:NL, 1:N_procs))
         allocate(Ua_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Va_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Wa_procs(0:NX+1, 0:NY+1, 0:N_procs+1))
-        allocate(Fxc_procs(1:NX, 1:NY, 1:N_procs), Fyc_procs(1:NX, 1:NY, 1:N_procs), Fzc_procs(1:NX, 1:NY, 1:N_procs))
+        allocate(Fxc_procs(1:NC, 1:NL, 1:N_procs), Fyc_procs(1:NC, 1:NL, 1:N_procs), Fzc_procs(1:NC, 1:NL, 1:N_procs))
         allocate(fxint_procs(1:NX, 1:NY, 1:N_procs), fyint_procs(1:NX, 1:NY, 1:N_procs), fzint_procs(1:NX, 1:NY, 1:N_procs))
 
         ! 格子点中心座標
@@ -1312,8 +1319,17 @@ contains
             Z_procs(:, :, k) = (myrank*N_procs + k-0.5d0)*dZ
         enddo
 
-        ! 円柱上の座標
-        if (NC == 4) then
+        ! 外力点の定義
+        Uc_procs(:, :, :) = 0.0d0
+        Vc_procs(:, :, :) = 0.0d0
+        Wc_procs(:, :, :) = 0.0d0
+        if (ibm_type == 11) then
+            do j = 1, NL
+                Xc_procs(1, j, :) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
+                Yc_procs(1, j, :) = 2*PI/2 + DC/2 * sin(2*PI/NL*j)
+            enddo
+        endif
+        if (ibm_type == 12) then
             do j = 1, NL
                 Xc_procs(1, j, :) = 2*PI* 5/16 + DC/2 * cos(2*PI/NL*j)
                 Yc_procs(1, j, :) = 2*PI* 5/16 + DC/2 * sin(2*PI/NL*j)
@@ -1323,26 +1339,26 @@ contains
                 Yc_procs(3, j, :) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
                 Xc_procs(4, j, :) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
                 Yc_procs(4, j, :) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
-            enddo
-        else if (NC == 1) then
-            do j = 1, NL
-                Xc_procs(1, j, :) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
-                Yc_procs(1, j, :) = 2*PI/2 + DC/2 * sin(2*PI/NL*j)
+                Uc_procs(1, j, :) = sin(2*PI/NL*j)
+                Vc_procs(1, j, :) = -cos(2*PI/NL*j)
+                Uc_procs(2, j, :) = -sin(2*PI/NL*j)
+                Vc_procs(2, j, :) = cos(2*PI/NL*j)
+                Uc_procs(3, j, :) = -sin(2*PI/NL*j)
+                Vc_procs(3, j, :) = cos(2*PI/NL*j)
+                Uc_procs(4, j, :) = sin(2*PI/NL*j)
+                Vc_procs(4, j, :) = -cos(2*PI/NL*j)
             enddo
         endif
-        do k = 1, N_procs
-            Zc_procs(:, :, k) = (myrank*N_procs + k-0.25d0)*dZ
-        enddo
-        Xc_procs(:, :, :) = Xc_procs(:, :, :) + 10d-10*dX
-        Yc_procs(:, :, :) = Yc_procs(:, :, :) + 10d-10*dY
-        Zc_procs(:, :, :) = Zc_procs(:, :, :) + 10d-10*dZ
-
-        ! 円柱上の座標での速度
-        Uc_procs(:, :, :) = 0.0d0
-        Vc_procs(:, :, :) = 0.0d0
-        Wc_procs(:, :, :) = 0.0d0
-        if (NC == 4) then
+        if (ibm_type == 13) then
             do j = 1, NL
+                Xc_procs(1, j, :) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
+                Yc_procs(1, j, :) = 2*PI/4 + DC/2 * sin(2*PI/NL*j)
+                Xc_procs(2, j, :) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
+                Yc_procs(2, j, :) = 2*PI/4 + DC/2 * sin(2*PI/NL*j)
+                Xc_procs(3, j, :) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
+                Yc_procs(3, j, :) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
+                Xc_procs(4, j, :) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
+                Yc_procs(4, j, :) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
                 Uc_procs(1, j, :) = -sin(2*PI/NL*j)
                 Vc_procs(1, j, :) = cos(2*PI/NL*j)
                 Uc_procs(2, j, :) = sin(2*PI/NL*j)
@@ -1353,6 +1369,36 @@ contains
                 Vc_procs(4, j, :) = cos(2*PI/NL*j)
             enddo
         endif
+        if (ibm_type == 21) then
+            index = 0
+            do i = 0, NL_lap
+                do j = 1, NL_shell(i)
+                    index = index + 1
+                    Xc_procs(1, index, :) = 2*PI/4   + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc_procs(1, index, :) = 2*PI/4   + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Xc_procs(2, index, :) = 2*PI*3/4 + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc_procs(2, index, :) = 2*PI/4   + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Xc_procs(3, index, :) = 2*PI/4   + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc_procs(3, index, :) = 2*PI*3/4 + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Xc_procs(4, index, :) = 2*PI*3/4 + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc_procs(4, index, :) = 2*PI*3/4 + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Uc_procs(1, index, :) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc_procs(1, index, :) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc_procs(2, index, :) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc_procs(2, index, :) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc_procs(3, index, :) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc_procs(3, index, :) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc_procs(4, index, :) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc_procs(4, index, :) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                enddo
+            enddo
+        endif
+        do k = 1, N_procs
+            Zc_procs(:, :, k) = (myrank*N_procs + k-0.25d0)*dZ
+        enddo
+        Xc_procs(:, :, :) = Xc_procs(:, :, :) + 10d-10*dX
+        Yc_procs(:, :, :) = Yc_procs(:, :, :) + 10d-10*dY
+        Zc_procs(:, :, :) = Zc_procs(:, :, :) + 10d-10*dZ
 
     end subroutine ibm_init
 
@@ -1364,7 +1410,7 @@ contains
         real(8), intent(inout) :: Ax0_procs(1:NX, 1:NY, 1:N_procs), Ay0_procs(1:NX, 1:NY, 1:N_procs), Az0_procs(1:NX, 1:NY, 1:N_procs)
         real(8), intent(in) :: Bx_procs(1:NX, 1:NY, 1:N_procs), By_procs(1:NX, 1:NY, 1:N_procs), Bz_procs(1:NX, 1:NY, 1:N_procs)
         real(8), intent(out) :: Ua_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Va_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Wa_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
-        real(8), intent(inout) :: Fxc_procs(1:NX, 1:NY, 1:N_procs), Fyc_procs(1:NX, 1:NY, 1:N_procs), Fzc_procs(1:NX, 1:NY, 1:N_procs)
+        real(8), intent(inout) :: Fxc_procs(1:NC, 1:NL, 1:N_procs), Fyc_procs(1:NC, 1:NL, 1:N_procs), Fzc_procs(1:NC, 1:NL, 1:N_procs)
         real(8), intent(out) :: Up_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Vp_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Wp_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
         integer, intent(in) :: step
         integer i, j, k
@@ -1442,7 +1488,7 @@ contains
         real(8), intent(in) :: X_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Y_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Z_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
         real(8), intent(in) :: Xc_procs(1:NC, 1:NL, 1:N_procs), Yc_procs(1:NC, 1:NL, 1:N_procs), Zc_procs(1:NC, 1:NL, 1:N_procs)
         real(8), intent(in) :: Uc_procs(1:NC, 1:NL, 1:N_procs), Vc_procs(1:NC, 1:NL, 1:N_procs), Wc_procs(1:NC, 1:NL, 1:N_procs)
-        real(8), intent(inout) :: Fxc_procs(1:NX, 1:NY, 1:N_procs), Fyc_procs(1:NX, 1:NY, 1:N_procs), Fzc_procs(1:NX, 1:NY, 1:N_procs)
+        real(8), intent(inout) :: Fxc_procs(1:NC, 1:NL, 1:N_procs), Fyc_procs(1:NC, 1:NL, 1:N_procs), Fzc_procs(1:NC, 1:NL, 1:N_procs)
         real(8), intent(out) :: fxint_procs(1:NX, 1:NY, 1:N_procs), fyint_procs(1:NX, 1:NY, 1:N_procs), fzint_procs(1:NX, 1:NY, 1:N_procs)
         integer i, j, k, l, m, n
         real(8) Ub_procs(1:NC, 1:NL, 1:N_procs), Vb_procs(1:NC, 1:NL, 1:N_procs), Wb_procs(1:NC, 1:NL, 1:N_procs)
@@ -1684,11 +1730,9 @@ program main
     real(8), allocatable :: U_ave_procs(:, :, :), V_ave_procs(:, :, :), W_ave_procs(:, :, :)
     real(8), allocatable :: U_rms_procs(:, :, :), V_rms_procs(:, :, :), W_rms_procs(:, :, :)
     real(8) Energy(0:NX)  ! エネルギーカスケードのために保存
-    integer s
     integer step
     real(8) time1, time2
     Energy(:) = 0.0d0
-    call mk_dir(dir)
 
     call MPI_Init(ierr)
     call MPI_Comm_Size(MPI_COMM_WORLD, procs, ierr)
@@ -1732,11 +1776,9 @@ program main
         if (method == 2) then
             call ibm_preliminary(U_procs, V_procs, W_procs, P_procs, Ax_procs, Ay_procs, Az_procs, Ax0_procs, Ay0_procs, Az0_procs, Bx_procs, By_procs, Bz_procs, &
                                  Ua_procs, Va_procs, Wa_procs, Fxc_procs, Fyc_procs, Fzc_procs, Up_procs, Vp_procs, Wp_procs, step)
-            do s = 1, NS
-                call ibm_Helmholtz(Up_procs, Vp_procs, Wp_procs, X_procs, Y_procs, Z_procs, Xc_procs, Yc_procs, Zc_procs, &
-                                   Uc_procs, Vc_procs, Wc_procs, Fxc_procs, Fyc_procs, Fzc_procs, fxint_procs, fyint_procs, fzint_procs)
-                call ibm_predict(Ua_procs, Va_procs, Wa_procs, fxint_procs, fyint_procs, fzint_procs, Bx_procs, By_procs, Bz_procs, Up_procs, Vp_procs, Wp_procs)
-            enddo
+            call ibm_Helmholtz(Up_procs, Vp_procs, Wp_procs, X_procs, Y_procs, Z_procs, Xc_procs, Yc_procs, Zc_procs, &
+                                Uc_procs, Vc_procs, Wc_procs, Fxc_procs, Fyc_procs, Fzc_procs, fxint_procs, fyint_procs, fzint_procs)
+            call ibm_predict(Ua_procs, Va_procs, Wa_procs, fxint_procs, fyint_procs, fzint_procs, Bx_procs, By_procs, Bz_procs, Up_procs, Vp_procs, Wp_procs)
             call fft_poisson(Up_procs, Vp_procs, Wp_procs, Phi_procs)
             call fft_march(Up_procs, Vp_procs, Wp_procs, U_procs, V_procs, W_procs, Phi_procs, P_procs)
         endif
@@ -1756,7 +1798,6 @@ program main
         endif
 
         if (mod(step, Gstep)==0) call get_data(U_procs, V_procs, W_procs, step)
-        ! if (mod(step, 10)==0) call taylor_debag(U_procs, V_procs, W_procs, step)
         if (mod(step, output_step)==0) call output(U_procs, V_procs, W_procs, P_procs, step)
         call logging(U_procs, V_procs, W_procs, step, time1)
 

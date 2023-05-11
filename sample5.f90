@@ -24,8 +24,8 @@ program main
     
 end program main
 
-! ifort -mkl sample5.f90
-! gfortran -llapack sample5.f90
+! ifort sample5.f90 -mkl
+! gfortran sample5.f90 -llapack
 
 ! frtpx sample5.f90 -SSL2
 ! jxsub single.sh

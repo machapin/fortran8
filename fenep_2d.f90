@@ -2,38 +2,43 @@ module smac
     implicit none
     ! gfortran fenep_2d.f90 -I$HOME/local/include -L$HOME/local/lib -lfftw3 && ./a.out
     ! ステップ数
-    integer, parameter :: Nstep = 1000000
-    integer, parameter :: Gstep = 1000  ! データを取得する間隔
+    integer, parameter :: Nstep = 100000
+    integer, parameter :: Gstep = 1000000  ! データを取得する間隔
     integer, parameter :: Estep = 1000000  ! エネルギースペクトルを取得する間隔
-    integer, parameter :: Dstep = 1000  ! デバッグする間隔
+    integer, parameter :: Dstep = 200  ! デバッグする間隔
     integer, parameter :: input_step = 0  ! 0以外で初期条件をファイルから読み込む
     integer, parameter :: output_step = 1000000  ! 配列を保存する間隔
     real(8), parameter :: PI = acos(-1.0d0)
     ! パラメータ
-    integer, parameter :: NX = 128, NY = NX
+    integer, parameter :: NX = 192, NY = NX
     real(8), parameter :: dX = 2*PI/NX, dY = 2*PI/NY  ! 規格化長さは2*PI
-    real(8), parameter :: dt = 0.0005d0
+    real(8), parameter :: dt = 0.002d0
     ! 手法
-    integer, parameter :: method = 3  ! 0:陽解法、1:FFT、2:IBM、3:固体壁
-    integer, parameter :: NC = NY/4+1  ! 1:円柱1つ、2:壁、4:実験装置, NY/2+1:壁の中全て、NY/4+1:壁の中半分
-    integer, parameter :: ibm_type = 1  ! 0:円柱、1:壁
-    integer, parameter :: flow_type = 0  ! 0:クエット流れ、1:ポアズイユ流れ、else:それ以外
+    integer, parameter :: method = 2  ! 0:陽解法、1:FFT、2:IBM、3:固体壁
+    integer, parameter :: ibm_type = 21  ! 1:壁表面、2:壁の中全て、3:壁の中半分、11:円柱表面1つ、12:円柱表面4つ(直径:2*PI/8.0d0)、13:円柱表面4つ(直径:2*PI/6.0d0)、21:円柱内部4つ(直径:2*PI/6.0d0)
+    integer, parameter :: flow_type = 0  ! 0:外力なし(f=0)、1:クエット流れ(Uwall=1)、2:ポアズイユ流れ(fx=1)、3:テイラーグリーン外力、4:テイラーグリーン渦の減衰
     integer, parameter :: eigen_method = 0  ! 0:固有値計算、1:SPDならindex3
     ! 無次元パラメータ
-    real(8), parameter :: Re = 1.0d0
-    real(8), parameter :: beta = 0.9d0
-    real(8), parameter :: Re_s = Re/beta
+    ! real(8), parameter :: Re = 1.0d0
+    real(8), parameter :: beta = 1.0d0
     real(8), parameter :: Wi = 1.0d0
     real(8), parameter :: Lp = 55.0d0
     ! 有次元パラメータ
-    real(8), parameter :: L_C = 1.0d0  ! 長さが100なら100/2*PI
-    real(8), parameter :: U_C = 1.0d0  ! 本来は乱流テイラーグリーン渦の平均流の速さ
-    real(8), parameter :: f0 = 1.0d0  ! 無次元化したときに1となるように
+    ! real(8), parameter :: L_C = 1.0d0  ! 長さが100なら100/2*PI
+    ! real(8), parameter :: U_C = 1.0d0  ! 本来は乱流テイラーグリーン渦の平均流の速さ
+    ! real(8), parameter :: nu = L_C*U_C/Re
+    ! 実験と同様のパラメータ
+    integer, parameter :: f_C = 2  ! 円柱回転速度[rps]
+    real(8), parameter :: D_C = 0.03d0  ! 円柱直径[m]
+    real(8), parameter :: U_C = f_C * PI * D_C  ! 代表速度
+    real(8), parameter :: L_C = D_C / (2*PI/6.0d0)  ! 代表長さ
+    real(8), parameter :: nu = 1.0d-6  ! 動粘性係数
+    real(8), parameter :: Re = U_C*L_C/nu
+    ! その他のパラメータ
     real(8), parameter :: dX_C = dX*L_C, dY_C = dY*L_C
     real(8), parameter :: dt_C = dt*L_C/U_C
-    real(8), parameter :: nu_s = L_C*U_C/Re_s
     ! グローバル変数
-    character(64) :: dir = './'
+    character(64) :: dir = './data/'
     real(8) counter(0:3)
 
 contains
@@ -43,31 +48,30 @@ contains
         real(8), intent(out) :: C(3, 0:NX+1, 0:NY+1)
         real(8), intent(out) :: Fx(1:NX, 1:NY), Fy(1:NX, 1:NY)
         integer i, j
-        real(8), parameter :: large_K = 2.0d0
+        character(2) str
+        write(str, '(I2.2)') ibm_type
 
-        if (beta == 1.0d0) dir = trim(dir)//'newton_'
-        if (flow_type == 0) dir = trim(dir)//'couette'
-        if (flow_type == 1) dir = trim(dir)//'poiseuille'
-        if (method == 2) then
-            if (NC == 2) dir = trim(dir)//'_ibm2'
-            if (NC == NY/2+1) dir = trim(dir)//'_ibm5'
-            if (NC == NY/4+1) dir = trim(dir)//'_ibm5'  ! 埋め込みのファイルはibm6
-        else if (method == 3) then
-            dir = trim(dir)//'_kabe'
-        else
-            dir = trim(dir)//'debug'
-        endif
+        if (method == 1) dir = trim(dir)//'fft'
+        if (method == 2) dir = trim(dir)//'ibm'//str
+        if (method == 3) dir = trim(dir)//'kabe'
+        if (flow_type == 1) dir = trim(dir)//'_couette'
+        if (flow_type == 2) dir = trim(dir)//'_poiseuille'
+        if (flow_type == 3) dir = trim(dir)//'_taylor'
+        if (flow_type == 4) dir = trim(dir)//'_taylor_decay'
+        if (beta == 1.0d0) dir = trim(dir)//'_newton'
         dir = trim(dir)//'/'
         write(*, '(a, a)') 'dir:  ', dir
+        call mk_dir(dir)
 
         ! write(*, '(a, F8.3, F8.3, a8)') 'Von Neumann:', 1.0d0/Re*dt/dX**2, 1.0d0/Re*dt/dY**2, '< 0.167'
-        write(*, '(a, F8.3, F8.3, a8)') 'CFL:', 1.0d0*dt/dX, 1.0d0*dt/dY,'< 0.167'
+        write(*, '(a, F8.3, F8.3, a8)') 'CFL:', 1.0d0*dt/dX*6.0d0, 1.0d0*dt/dY*6.0d0,'< 1.0'
         ! write(*, '(a, F8.3)') 'L_C =', L_C
         ! write(*, '(a, F8.3)') 'D_C =', D_C
         ! write(*, '(a, F8.3)') 'U_C =', U_C
         ! write(*, '(a, E12.4)') 'nu =', nu
-        ! write(*, '(a, F8.3)') 'Re  =', Re
-        ! write(*, '(a, E12.4)') 'dt_C =', dt_C
+        write(*, '(a, F8.3)') 'Re  =', Re
+        write(*, '(a, E12.4)') 'dt_C =', dt_C
+        write(*, '(a, F8.3)') 'step /[s]=', 1.0d0/dt_C
 
         ! 初期条件（Taylor-Green）
         ! U(:, :) = 0.0d0
@@ -78,34 +82,34 @@ contains
         V(:, :) = 0.001d0 * (V(:, :)-0.5d0)
         P(:, :) = 0.0d0
         Phi(:, :) = 0.0d0
+        Fx(:, :) = 0.0d0
         Fy(:, :) = 0.0d0
-        if (flow_type == 0) then
-            Fx(:, :) = 0.0d0
-        else if (flow_type == 1) then
+        if (flow_type == 2) then  ! ポアズイユ流れ
             Fx(:, :) = 1.0d0
-        else
+        endif
+        if (flow_type == 3) then
             do j = 1, NY
                 do i = 1, NX
-                    ! U(i, j) = -sin(i*dX) * cos((j-0.5d0)*dY)
-                    ! V(i, j) = cos((i-0.5d0)*dX) * sin(j*dY)
                     Fx(i, j) = -sin(i*dX) * cos((j-0.5d0)*dY)  ! 増田さん, 安房井さん
                     Fy(i, j) = cos((i-0.5d0)*dX) * sin(j*dY)
-                    ! Fx(i, j) = -sin(large_K*(j-0.5d0)*dY)  ! 小井手さん
-                    ! Fy(i, j) = sin(large_K*(i-0.5d0)*dX)
+                    ! Fx(i, j) = -sin(2.0d0*(j-0.5d0)*dY)  ! 小井手さん
+                    ! Fy(i, j) = sin(2.0d0*(i-0.5d0)*dX)
                 enddo
             enddo
         endif
-        Fx(:, :) = f0 * Fx(:, :)
-        Fy(:, :) = f0 * Fy(:, :)
+        if (flow_type == 4) then
+            do j = 1, NY
+                do i = 1, NX
+                    U(i, j) = -sin(i*dX) * cos((j-0.5d0)*dY)
+                    V(i, j) = cos((i-0.5d0)*dX) * sin(j*dY)
+                enddo
+            enddo
+        endif
 
         call random_number(C)
         C(:, :, :) = 0.001d0 * (C(:, :, :)-0.5d0)
         C(1, :, :) = C(1, :, :) + 1.0d0
         C(3, :, :) = C(3, :, :) + 1.0d0
-
-        ! C(:, :, :) = 0.0d0
-        ! C(1, :, :) = 1.2d0
-        ! C(3, :, :) = 1.1d0
 
         call PBM(U)
         call PBM(V)
@@ -604,7 +608,7 @@ contains
         call PBM(P)
     end subroutine march
 
-    subroutine taylor_debag(U, V, step)
+    subroutine taylor_debug(U, V, step)
         real(8), intent(in) :: U(0:NX+1, 0:NY+1), V(0:NX+1, 0:NY+1)
         integer, intent(in) :: step
         integer i, j
@@ -628,10 +632,10 @@ contains
         j = NY/4
         err = (sum((U0(1:NX, 1:NY)-U(1:NX, 1:NY))**2) &
               +sum((V0(1:NX, 1:NY)-V(1:NX, 1:NY))**2))/(NX*NY)
-        open(10, file=trim(dir)//'debag2.d', position='append')
+        open(10, file=trim(dir)//'taylor_debug.d', position='append')
         write(10, *) step, U0(NX/4, NY/4), U(NX/4, NY/4), U0(NX/4, NY/4) - U(NX/4, NY/4), sqrt(err)
         close(10)
-    end subroutine taylor_debag
+    end subroutine taylor_debug
 
 
     subroutine get_data(U, V, C, step)
@@ -639,11 +643,11 @@ contains
         real(8), intent(in) :: C(3, 0:NX+1, 0:NY+1)
         integer, intent(in) :: step
         integer i, j
-        real(8) D(2, 2), Omega, S
+        real(8) D(2, 2), Omega, S, trC, E(2)
         character(8) str
         write(str, '(I8.8)') step  ! 数値を文字列に変換
 
-        open(10, file=dir//'z_'//str//'.d')
+        open(10, file=trim(dir)//'z_'//str//'.d')
 
         do j = 1, NY
             do i = 1, NX
@@ -652,12 +656,16 @@ contains
                 D(2, 1) = (V(i+1, j) - V(i-1, j) + V(i+1, j-1) - V(i-1, j-1))/(4*dX)
                 D(2, 2) = (V(i, j) - V(i, j-1))/dY
                 D(:, :) = D(:, :)*U_C
+
+                E(1) = (U(i-1, j)+U(i, j))/2*U_C
+                E(2) = (V(i, j-1)+V(i, j))/2*U_C
                 Omega = (D(2, 1) - D(1, 2))
                 S = (D(2, 1) + D(1, 2))
-                write(10, '(100e12.4)') (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, 0.0d0, &
-                                    (U(i-1, j)+U(i, j))/2*U_C, (V(i, j-1)+V(i, j))/2*U_C, 0.0d0, &
-                                    Omega, 0.0d0, S, 0.0d0, 0.0d0, C(1, i, j)+C(3, i, j), &
-                                    C(1, i, j), C(2, i, j), 0.0d0, C(3, i, j)
+                trC = C(1, i, j)+C(3, i, j)
+
+                write(10, '(100e12.4)') (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, 0.0d0, E(1), E(2), 0.0d0, sum(E**2)/2, &
+                                    0.0d0, 0.0d0, Omega, Omega**2/2, &
+                                    trC, C(1, i, j), C(2, i, j), 0.0d0, C(3, i, j), 0.0d0, 0.0d0
             enddo
         enddo
         close(10)
@@ -674,6 +682,7 @@ contains
         integer i, j, count
         real(8) trC(1:NX, 1:NY), re1, re2
         integer(8) t_pre, hour, min, sec
+        real(8) mean, std
 
         if (mod(step, Dstep) == 0) then
             write(*, '(a, I6)', advance='no') 'step:', step
@@ -684,20 +693,27 @@ contains
             K_energy = K_energy/(NX*NY)
             write(*, '(a, e12.4)', advance='no') '  | K_energy:', K_energy
 
+            ! CFL条件
+            write(*, '(a, F7.3)', advance='no') &
+            '  | CFL:', max(maxval(U(:, :))*dt/dX, maxval(V(:, :))*dt/dY)*4.0d0
+
             ! write(*, '(a, F6.3)', advance='no') '  | index 0:', counter(0)*1.0d0/sum(counter)
             ! write(*, '(a, F6.3)', advance='no') '  1:', counter(1)*1.0d0/sum(counter)
             ! write(*, '(a, F6.3)', advance='no') '  2:', counter(2)*1.0d0/sum(counter)
             ! write(*, '(a, F6.3)', advance='no') '  3:', counter(3)*1.0d0/sum(counter)
             trC(:, :) = C(1, 1:NX, 1:NY) + C(3, 1:NX, 1:NY)
-            write(*, '(a, F7.3, a, F8.3)', advance='no') '  |', minval(trC(:, :)), '< trC <', maxval(trC(:, :))
+            mean = sum(trC) / (NX*NY)
+            std = sqrt(sum((trC-mean)**2) / (NX*NY))
+            write(*, '(a, F8.3, a, F7.3)', advance='no') '  | trC:', mean, ' +-', std
+            ! write(*, '(a, F7.3, a, F8.3)', advance='no') '  |', minval(trC(:, :)), '< trC <', maxval(trC(:, :))
 
-            count = 0
-            do j = 1, NY
-                do i = 1, NX
-                    call Eigenvalues(C(:, i, j), re1, re2)
-                    if (re1 > 0.0d0) count = count + 1
-                enddo
-            enddo
+            ! count = 0
+            ! do j = 1, NY
+            !     do i = 1, NX
+            !         call Eigenvalues(C(:, i, j), re1, re2)
+            !         if (re1 > 0.0d0) count = count + 1
+            !     enddo
+            ! enddo
             ! write(*, '(a, F7.3)', advance='no') '  | SPD:', count*1.0d0/(NX*NY)
 
             call cpu_time(t_temp)
@@ -1052,7 +1068,7 @@ contains
         K_energy = K_energy/2.d0
         K_energy = K_energy/(NX*NY)
         ! write(*, '(I6, 5e12.4)') step, K_energy, sum(Energy(:)), K_energy-sum(Energy(:)), Energy(0), K_energy/sum(Energy(:))   ! 一致するはず
-        ! open(30, file = 'fft/debag_energy.d', position='append')
+        ! open(30, file = 'fft/debug_energy.d', position='append')
         ! write(30, '(I6, 2e12.4)') step, K_energy, sum(Energy(:))
         ! close(30)
 
@@ -1070,9 +1086,8 @@ module kabe
 contains
     subroutine kabe_init(U, V, P, C)
         real(8), intent(inout) :: U(0:NX+1, 0:NY+1), V(0:NX+1, 0:NY+1), P(0:NX+1, 0:NY+1), C(3, 0:NX+1, 0:NY+1)
-        if (flow_type /= 0 .and. flow_type /= 1) stop 'please select flow_type = 0 or 1'
-        if (flow_type == 0) Uwall = 1.0d0
-        if (flow_type == 1) Uwall = 0.0d0
+        if (flow_type == 1) Uwall = 1.0d0
+        if (flow_type == 2) Uwall = 0.0d0
         call U_kabe(U)
         call V_kabe(V)
         call P_kabe(P)
@@ -1427,41 +1442,85 @@ module ibm
     use fft
     implicit none
     ! IBM用パラメータ
-    ! integer, parameter :: NC = 2  ! 1:円柱、2:壁、4:実験, NY/2+1:壁の中全て、NY/4+1:壁の中半分
-    real(8), parameter :: DC = 2*PI/8.0d0  ! 円柱直径
-    integer, parameter :: NL = ibm_type * NX + (ibm_type-1) * nint(PI*DC/dX)  !  円周方向の分割数or壁面の分割数
-    real(8) dV
-    character(64) :: dir_ibm
+    integer NC, NL
+    real(8) DC, dV
+    character(64) :: dir_ibm = './ibm/'
 contains
-    subroutine ibm_init(X, Y, Xc, Yc, Uc, Vc)
+    subroutine ibm_init(X, Y, Xc, Yc, Uc, Vc, Fxc, Fyc)
         real(8), intent(out) :: X(0:NX+1, 0:NY+1), Y(0:NX+1, 0:NY+1)
-        real(8), intent(out) :: Xc(1:NC, 1:NL), Yc(1:NC, 1:NL)
-        real(8), intent(out) :: Uc(1:NC, 1:NL), Vc(1:NC, 1:NL)
-        integer i, j
+        real(8), allocatable :: Xc(:, :), Yc(:, :)
+        real(8), allocatable :: Uc(:, :), Vc(:, :)
+        real(8), allocatable :: Fxc(:, :), Fyc(:, :)
+        integer i, j, index
+        integer NL_lap  ! 円柱内部の殻数
+        integer, allocatable :: NL_shell(:)  ! 殻に対する外力点の数
+        character(2) str
+        write(str, '(I2.2)') ibm_type
+        dir_ibm = trim(dir_ibm)//'ibm'//str//'/'
+        write(*, '(a, a)') 'dir_ibm:   ', dir_ibm
+        call mk_dir(trim(dir_ibm))
 
+        if (ibm_type == 1) then  ! 壁表面
+            NC = 2
+            NL = NX
+            dV = dX*dX
+        endif
+        if (ibm_type == 2) then  ! 壁の中全て
+            NC = NY/2+1
+            NL = NX
+            dV = dX*dX
+        endif
+        if (ibm_type == 3) then  ! 壁の中半分
+            NC = NY/4+1
+            NL = NX
+            dV = dX*dX
+        endif
+        if (ibm_type == 11) then  ! 円柱表面1つ
+            NC = 1
+            DC = 2*PI/6.0d0
+            NL = nint(PI*DC/dX)
+            dV = PI*DC/NL * dX
+        endif
+        if (ibm_type == 12) then  ! 円柱表面4つ(直径:2*PI/8.0d0)
+            NC = 4
+            DC = 2*PI/8.0d0
+            NL = nint(PI*DC/dX)
+            dV = PI*DC/NL * dX
+        endif
+        if (ibm_type == 13) then  ! 円柱表面4つ(直径:2*PI/6.0d0)
+            NC = 4
+            DC = 2*PI/6.0d0
+            NL = nint(PI*DC/dX)
+            dV = PI*DC/NL * dX
+        endif
+        if (ibm_type == 21) then  ! 円柱内部4つ(直径:2*PI/6.0d0)
+            NC = 4
+            DC = 2*PI/6.0d0
+            NL_lap = int(DC/(2*dX))  ! 円柱内部の殻数
+            allocate(NL_shell(0:NL_lap))
+            do i = 0, NL_lap
+                NL_shell(i) = nint(PI*(DC-2*i*dX)/dX)
+            enddo
+            if (NL_shell(NL_lap) == 0) NL_shell(NL_lap) = 1  ! 中心に外力点を1つ置く
+            NL = sum(NL_shell)
+            dV = PI*(DC+dX)**2/4 / NL
+            write(*, '(a, 100I5)') 'NL_shell:  ', NL_shell(:)
+        endif
+
+        ! NLを定義したあとallocate
+        allocate(Xc(1:NC, 1:NL), Yc(1:NC, 1:NL))
+        allocate(Uc(1:NC, 1:NL), Vc(1:NC, 1:NL))
+        allocate(Fxc(1:NC, 1:NL), Fyc(1:NC, 1:NL))
+
+        ! コメントとファイル
         if (dX /= dY) then
             stop 'dX and dY are not equal'
         endif
 
-        if (flow_type == 0 .or. flow_type == 1) then  ! 壁
-            dV = dX*dX
-            if (NC == 2) dir_ibm ='./ibm2/'
-            if (NC == NY/2+1)  dir_ibm = './ibm5/'
-            if (NC == NY/4+1) dir_ibm = './ibm6/'
-        else
-            dV = PI*DC/NL * dX
-            if (NC == 1) dir_ibm = './ibm1/'
-            if (NC == 4 .and. DC == 2*PI/8.0d0) dir_ibm = './ibm4/'
-            if (NC == 4 .and. DC == 2*PI/6.0d0) dir_ibm = './ibm4_v2/'
-        endif
-        ! dir_ibm = trim(dir_ibm)
-
-
         write(*, '(a, I5)') 'NL:  ', NL
-        write(*, '(a, I5)') 'NC:  ', NC
-        write(*, '(a, a)') 'dir_ibm:   ', dir_ibm
-        ! write(*, '(a, E12.4)') 'dX**2:', dX**2
-        ! write(*, '(a, E12.4)') 'dV   :', dV
+        write(*, '(a, E12.4)') 'dX**2:', dX**2
+        write(*, '(a, E12.4)') 'dV   :', dV
+
 
         ! 格子点中心座標
         do i = 0, NX+1
@@ -1471,43 +1530,21 @@ contains
             Y(:, j) = (j-0.5d0)*dY
         enddo
 
-        ! 円柱上の座標
-        if (NC == 4) then
-            ! if (DC == 2*PI/8.0d0) then
-            !     do j = 1, NL
-            !         Xc(1, j) = 2*PI* 5/16 + DC/2 * cos(2*PI/NL*j)
-            !         Yc(1, j) = 2*PI* 5/16 + DC/2 * sin(2*PI/NL*j)
-            !         Xc(2, j) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
-            !         Yc(2, j) = 2*PI* 5/16 + DC/2 * sin(2*PI/NL*j)
-            !         Xc(3, j) = 2*PI* 5/16 + DC/2 * cos(2*PI/NL*j)
-            !         Yc(3, j) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
-            !         Xc(4, j) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
-            !         Yc(4, j) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
-            !     enddo
-            ! else if (DC == 2*PI/6.0d0) then
-            !     do j = 1, NL
-            !         Xc(1, j) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
-            !         Yc(1, j) = 2*PI/4 + DC/2 * sin(2*PI/NL*j)
-            !         Xc(2, j) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
-            !         Yc(2, j) = 2*PI/4 + DC/2 * sin(2*PI/NL*j)
-            !         Xc(3, j) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
-            !         Yc(3, j) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
-            !         Xc(4, j) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
-            !         Yc(4, j) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
-            !     enddo
-            ! endif
-        else if (NC == 1) then
-            do j = 1, NL
-                Xc(1, j) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
-                Yc(1, j) = 2*PI/2 + DC/2 * sin(2*PI/NL*j)
-            enddo
-        else if (NC == 2) then
+        ! 外力点の定義
+        Uc(:, :) = 0.0d0
+        Vc(:, :) = 0.0d0
+        if (ibm_type == 1) then
             do j = 1, NL
                 Xc(:, j) = (j-0.25d0)*dX
             enddo
             Yc(1, :) = 2*PI/4
             Yc(2, :) = 2*PI*3/4
-        else if (NC == NY/2+1) then
+            if (flow_type == 1) then
+                Uc(1, :) = 0.0d0
+                Uc(2, :) = 1.0d0
+            endif
+        endif
+        if (ibm_type == 2) then
             do j = 1, NL
                 Xc(:, j) = (j-0.25d0)*dX
             enddo
@@ -1517,7 +1554,16 @@ contains
             do i = NY/4+2, NY/2+1
                 Yc(i, :) = (i-2)*dY + PI
             enddo
-        else if (NC == NY/4+1) then
+            if (flow_type == 1) then
+                do i = 1, NY/4+1
+                    Uc(i, :) = 0.5d0 - (i-0.5d0)*0.5d0/(NY/4)
+                enddo
+                do i = NY/4+2, NY/2+1
+                    Uc(i, :) = 1.5d0 - (i-1.5d0)*0.5d0/(NY/4)
+                enddo
+            endif
+        endif
+        if (ibm_type == 3) then
             do j = 1, NL
                 Xc(:, j) = (j-0.25d0)*dX
             enddo
@@ -1527,37 +1573,7 @@ contains
             do i = NY/8+2, NY/4+1
                 Yc(i, :) = (i-2)*dY + 2*PI*5/8
             enddo
-        endif
-        Xc(:, :) = Xc(:, :) + 10d-10*dX  ! 速度定義点から少しずらして外力点を定義
-        Yc(:, :) = Yc(:, :) + 10d-10*dX
-
-        ! 円柱上の座標での速度
-        Uc(:, :) = 0.0d0
-        Vc(:, :) = 0.0d0
-        ! if (NC == 4) then
-        !     do j = 1, NL
-        !         Uc(1, j) = -sin(2*PI/NL*j)  ! 代表速度は出力時にかける
-        !         Vc(1, j) = cos(2*PI/NL*j)
-        !         Uc(2, j) = sin(2*PI/NL*j)
-        !         Vc(2, j) = -cos(2*PI/NL*j)
-        !         Uc(3, j) = sin(2*PI/NL*j)
-        !         Vc(3, j) = -cos(2*PI/NL*j)
-        !         Uc(4, j) = -sin(2*PI/NL*j)
-        !         Vc(4, j) = cos(2*PI/NL*j)
-        !     enddo
-        ! endif
-        if (flow_type == 0) then
-            if (NC == 2) then
-                Uc(1, :) = 0.0d0
-                Uc(2, :) = 1.0d0
-            else if (NC == NY/2+1) then
-                do i = 1, NY/4+1
-                    Uc(i, :) = 0.5d0 - (i-0.5d0)*0.5d0/(NY/4)
-                enddo
-                do i = NY/4+2, NY/2+1
-                    Uc(i, :) = 1.5d0 - (i-1.5d0)*0.5d0/(NY/4)
-                enddo
-            else if (NC == NY/4+1) then
+            if (flow_type == 1) then
                 do i = 1, NY/8+1
                     Uc(i, :) = 0.0d0
                 enddo
@@ -1566,6 +1582,79 @@ contains
                 enddo
             endif
         endif
+        if (ibm_type == 11) then
+            do j = 1, NL
+                Xc(1, j) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
+                Yc(1, j) = 2*PI/2 + DC/2 * sin(2*PI/NL*j)
+            enddo
+        endif
+        if (ibm_type == 12) then
+            do j = 1, NL
+                Xc(1, j) = 2*PI* 5/16 + DC/2 * cos(2*PI/NL*j)
+                Yc(1, j) = 2*PI* 5/16 + DC/2 * sin(2*PI/NL*j)
+                Xc(2, j) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
+                Yc(2, j) = 2*PI* 5/16 + DC/2 * sin(2*PI/NL*j)
+                Xc(3, j) = 2*PI* 5/16 + DC/2 * cos(2*PI/NL*j)
+                Yc(3, j) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
+                Xc(4, j) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
+                Yc(4, j) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
+                Uc(1, j) = -sin(2*PI/NL*j)
+                Vc(1, j) = cos(2*PI/NL*j)
+                Uc(2, j) = sin(2*PI/NL*j)
+                Vc(2, j) = -cos(2*PI/NL*j)
+                Uc(3, j) = sin(2*PI/NL*j)
+                Vc(3, j) = -cos(2*PI/NL*j)
+                Uc(4, j) = -sin(2*PI/NL*j)
+                Vc(4, j) = cos(2*PI/NL*j)
+            enddo
+        endif   
+        if (ibm_type == 13) then
+            do j = 1, NL
+                Xc(1, j) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
+                Yc(1, j) = 2*PI/4 + DC/2 * sin(2*PI/NL*j)
+                Xc(2, j) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
+                Yc(2, j) = 2*PI/4 + DC/2 * sin(2*PI/NL*j)
+                Xc(3, j) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
+                Yc(3, j) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
+                Xc(4, j) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
+                Yc(4, j) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
+                Uc(1, j) = -sin(2*PI/NL*j)
+                Vc(1, j) = cos(2*PI/NL*j)
+                Uc(2, j) = sin(2*PI/NL*j)
+                Vc(2, j) = -cos(2*PI/NL*j)
+                Uc(3, j) = sin(2*PI/NL*j)
+                Vc(3, j) = -cos(2*PI/NL*j)
+                Uc(4, j) = -sin(2*PI/NL*j)
+                Vc(4, j) = cos(2*PI/NL*j)
+            enddo
+        endif
+        if (ibm_type == 21) then
+            index = 0
+            do i = 0, NL_lap
+                do j = 1, NL_shell(i)
+                    index = index + 1
+                    Xc(1, index) = 2*PI/4   + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc(1, index) = 2*PI/4   + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Xc(2, index) = 2*PI*3/4 + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc(2, index) = 2*PI/4   + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Xc(3, index) = 2*PI/4   + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc(3, index) = 2*PI*3/4 + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Xc(4, index) = 2*PI*3/4 + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc(4, index) = 2*PI*3/4 + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Uc(1, index) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(1, index) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc(2, index) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(2, index) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc(3, index) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(3, index) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc(4, index) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(4, index) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                enddo
+            enddo
+        endif
+        Xc(:, :) = Xc(:, :) + 10d-10*dX  ! 速度定義点から少しずらして外力点を定義
+        Yc(:, :) = Yc(:, :) + 10d-10*dX
+
     end subroutine ibm_init
 
     subroutine ibm_get(Xc, Yc)
@@ -1573,7 +1662,6 @@ contains
         integer i, j
         character(8) str
 
-        call mk_dir(trim(dir_ibm))
         do i = 1, NC
             write(str, '(I8.8)') i
             open(10, file=trim(dir_ibm)//str//'.d')
@@ -1673,9 +1761,9 @@ contains
         integer i, j, l, m
         real(8) Ub(1:NC, 1:NL), Vb(1:NC, 1:NL)
         real(8) fxtmp(0:NX+1, 0:NY+1), fytmp(0:NX+1, 0:NY+1)
-        real(8) er
-        integer count2d(0:NX+1, 0:NY+1), countint(1:NX, 1:NY)
-        count2d(:, :) = 0
+        ! real(8) er
+        ! integer count2d(0:NX+1, 0:NY+1), countint(1:NX, 1:NY)
+        ! count2d(:, :) = 0
         
         Ub(:, :) = 0.0d0
         Vb(:, :) = 0.0d0
@@ -1715,7 +1803,7 @@ contains
                     do i = int(Xc(l, m)/dX - 0.5d0), int(Xc(l, m)/dX - 0.5d0) + 2
                         fxtmp(i, j) = fxtmp(i, j) &
                                     + Fxc(l, m) * delta(X(i, j)+0.5d0*dX, Y(i, j), Xc(l, m), Yc(l, m)) * dV
-                        count2d(i, j) = count2d(i, j) + 1
+                        ! count2d(i, j) = count2d(i, j) + 1
                     enddo
                 enddo
                 do j = int(Yc(l, m)/dY - 0.5d0), int(Yc(l, m)/dY - 0.5d0) + 2
@@ -1829,10 +1917,10 @@ program main
     real(8) Fx(1:NX, 1:NY), Fy(1:NX, 1:NY)
     ! ibmのために追加した変数
     real(8) X(0:NX+1, 0:NY+1), Y(0:NX+1, 0:NY+1)
-    real(8) Xc(1:NC, 1:NL), Yc(1:NC, 1:NL)
-    real(8) Uc(1:NC, 1:NL), Vc(1:NC, 1:NL)
+    real(8), allocatable :: Xc(:, :), Yc(:, :)
+    real(8), allocatable :: Uc(:, :), Vc(:, :)
+    real(8), allocatable :: Fxc(:, :), Fyc(:, :)
     real(8) Ua(0:NX+1, 0:NY+1), Va(0:NX+1, 0:NY+1)
-    real(8) Fxc(1:NC, 1:NL), Fyc(1:NC, 1:NL)
     real(8) fxint(1:NX, 1:NY), fyint(1:NX, 1:NY)
     integer step, i, j
     real(8) t1, t2, t3, t4, t5, t12, t23, t34, t45
@@ -1842,24 +1930,31 @@ program main
     
     call fft_init
     call init(U, V, P, Phi, C, Fx, Fy)  ! 初期条件
-    call mk_dir(dir)
     if (input_step > 0) call input(U, V, P)
     ! call energy_single(U, V, W, 0)
-    if (method == 2) call ibm_init(X, Y, Xc, Yc, Uc, Vc)
+    if (method == 2) call ibm_init(X, Y, Xc, Yc, Uc, Vc, Fxc, Fyc)
     if (method == 2) call ibm_get(Xc, Yc)
     if (method == 3) call kabe_init(U, V, P, C)
 
     do step = 1, Nstep
         call cpu_time(t1)
-        call CpxCnx(C, Cpx, Cnx)
-        call CpyCny(C, Cpy, Cny)
+        if (beta == 1.0d0) then
+            C(:, :, :) = 0.0d0
+            Tx(:, :) = 0.0d0
+            Ty(:, :) = 0.0d0
+            call cpu_time(t2)
+            call cpu_time(t3)
+        else
+            call CpxCnx(C, Cpx, Cnx)
+            call CpyCny(C, Cpy, Cny)
 
-        call cpu_time(t2)
-        call Cstar(Cpx, Cnx, Cpy, Cny, U, V, Cx)
-        call Lyapunov(Cx, U, V, C)
-        call cpu_time(t3)
+            call cpu_time(t2)
+            call Cstar(Cpx, Cnx, Cpy, Cny, U, V, Cx)
+            call Lyapunov(Cx, U, V, C)
+            call cpu_time(t3)
 
-        call polymer_stress(C, Tx, Ty)
+            call polymer_stress(C, Tx, Ty)
+        endif
         call convection(U, V, Ax, Ay)
         call viscous(U, V, Bx, By)
 
@@ -1900,9 +1995,8 @@ program main
         call cpu_time(t5)
 
         call logging(U, V, C, step, t_start)
-        ! if (mod(step, Gstep)==0) call get_data(U, V, C, step)
-        ! if (mod(step, Gstep)==0) call taylor_debag(U, V, step)
-        ! if (mod(step, Estep)==0) call energy_single(U, V, step)
+        if (mod(step, Gstep)==0) call get_data(U, V, C, step)
+        if (mod(step, Estep)==0) call energy_single(U, V, step)
         ! if (mod(step, output_step)==0) call output(U, V, P, step)
         if (sum(U**2)*0.0d0 /= 0.0d0) stop 'NaN value'  ! NaNの判定
         t12 = t12 + t2-t1
@@ -1911,7 +2005,7 @@ program main
         t45 = t45 + t5-t4
 
         ! write(*, '(12e12.4)') U(1:12, 1)
-        if (mod(step, Gstep)==0) then
+        if (mod(step, Dstep)==0) then
             open(11, file=trim(dir)//'debug.d')
             if (method == 3) then
                 do j = NA, NB+1
@@ -1924,7 +2018,9 @@ program main
             endif
             close(11)
         endif
-        if (mod(step, Gstep)==0 .and. flow_type == 1) call koide_theory(U, V, C)
+        
+        if (mod(step, Gstep)==0 .and. flow_type == 4) call taylor_debug(U, V, step)
+        if (mod(step, Dstep)==0 .and. flow_type == 2) call koide_theory(U, V, C)
     enddo
 
 
