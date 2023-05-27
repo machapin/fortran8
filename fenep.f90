@@ -3,9 +3,9 @@ module smac
     ! gfortran fenep.f90 -I$HOME/local/include -L$HOME/local/lib -lfftw3 -llapack && ./a.out
     ! ステップ数
     integer, parameter :: Nstep = 1
-    integer, parameter :: Gstep = 1  ! データを取得する間隔
+    integer, parameter :: Gstep = 100  ! データを取得する間隔
     integer, parameter :: Estep = 1000  ! エネルギースペクトルを取得する間隔
-    integer, parameter :: Dstep = 1  ! デバッグする間隔
+    integer, parameter :: Dstep = 10  ! デバッグする間隔
     integer, parameter :: input_step = 0  ! 0以外で初期条件をファイルから読み込む
     integer, parameter :: output_step = 100000  ! 配列を保存する間隔
     real(8), parameter :: PI = acos(-1.0d0)
@@ -38,7 +38,7 @@ module smac
     real(8), parameter :: dX_C = dX*L_C, dY_C = dY*L_C, dZ_C = dZ*L_C
     real(8), parameter :: dt_C = dt*L_C/U_C
     ! グローバル変数
-    character(64) :: dir = './data/'
+    character(64) :: dir = './tmp/'
     real(8) counter(0:3), newton_itr
     integer poisson_itr
     ! LAPACK用変数
@@ -920,7 +920,7 @@ contains
                     D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
                     D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
                     D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
-                    D(:, :) = D(:, :)*U_C
+                    D(:, :) = D(:, :)*U_C/L_C
 
                     Omega(1) = (D(3, 2) - D(2, 3))
                     Omega(2) = (D(1, 3) - D(3, 1))
@@ -962,7 +962,7 @@ contains
                 D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
                 D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
                 D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
-                D(:, :) = D(:, :)*U_C
+                D(:, :) = D(:, :)*U_C/L_C
 
                 omega = (D(2, 1) - D(1, 2))
                 sendan = (D(2, 1) + D(1, 2))
@@ -1002,7 +1002,7 @@ contains
                 D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
                 D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
                 D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
-                D(:, :) = D(:, :)*U_C
+                D(:, :) = D(:, :)*U_C/L_C
 
                 Omega(1) = (D(3, 2) - D(2, 3))
                 Omega(2) = (D(1, 3) - D(3, 1))
@@ -1034,7 +1034,7 @@ contains
         integer(8) t_pre, hour, min, sec
         real(8) U_tmp(0:NX+1, 0:NY+1, 0:NZ+1), V_tmp(0:NX+1, 0:NY+1, 0:NZ+1), W_tmp(0:NX+1, 0:NY+1, 0:NZ+1)
         real(8) U_grad(NX, NY, NZ), V_grad(NX, NY, NZ), W_grad(NX, NY, NZ)
-        real(8) U_rms, lamda, Re_lamda, tmp, D(3, 3), S(3, 3), epsilon, eta
+        real(8) U_rms, lambda, Re_lambda, tmp, D(3, 3), S(3, 3), epsilon, eta
         real(8) mean, std
 
         if (mod(step, Dstep) == 0) then
@@ -1048,19 +1048,19 @@ contains
             do k = 1, NZ
                 do j = 1, NY
                     do i = 1, NX
-                        U_grad(i, j, k) = (U_tmp(i, j, k) - U_tmp(i-1, j, k))/dX
-                        V_grad(i, j, k) = (V_tmp(i, j, k) - V_tmp(i, j-1, k))/dY
-                        W_grad(i, j, k) = (W_tmp(i, j, k) - W_tmp(i, j, k-1))/dZ
+                        U_grad(i, j, k) = (U_tmp(i, j, k) - U_tmp(i-1, j, k))/dX_C
+                        V_grad(i, j, k) = (V_tmp(i, j, k) - V_tmp(i, j-1, k))/dY_C
+                        W_grad(i, j, k) = (W_tmp(i, j, k) - W_tmp(i, j, k-1))/dZ_C
                     enddo
                 enddo
             enddo
             U_rms = sqrt((sum(U_tmp(1:NX, 1:NY, 1:NZ)**2) &
                         + sum(V_tmp(1:NX, 1:NY, 1:NZ)**2) &
                         + sum(W_tmp(1:NX, 1:NY, 1:NZ)**2))/(3.0d0*NX*NY*NZ))
-            lamda = sqrt(sum(U_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(U_grad**2) &  ! 空間平均同士で割るので格子点数で割らなくてよい
-                    + sum(V_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(V_grad**2) &
-                    + sum(W_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(W_grad**2))
-            Re_lamda = U_rms*lamda/nu
+            lambda = sqrt(sum(U_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(U_grad**2) &  ! 空間平均同士で割るので格子点数で割らなくてよい
+                        + sum(V_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(V_grad**2) &
+                        + sum(W_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(W_grad**2))
+            Re_lambda = U_rms*lambda/nu
 
             ! コルモゴロフ長
             tmp = 0.0d0
@@ -1076,7 +1076,7 @@ contains
                         D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
                         D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
                         D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
-                        D(:, :) = D(:, :)*U_C
+                        D(:, :) = D(:, :)*U_C/L_C
                         S(1, 1) = (D(1, 1) + D(1, 1))
                         S(1, 2) = (D(1, 2) + D(2, 1))
                         S(1, 3) = (D(1, 3) + D(3, 1))
@@ -1092,7 +1092,7 @@ contains
             enddo
             epsilon = 0.5d0*nu*tmp/(NX*NY*NZ)
             eta = (nu**3/epsilon)**0.25d0
-            ! write(*, '(12e12.4)') Re_lamda, epsilon, eta, dX
+            ! write(*, '(12e12.4)') Re_lambda, epsilon, eta, dX
         endif
 
         if (mod(step, Dstep) == 0) then
@@ -1106,7 +1106,7 @@ contains
 
             ! CFL条件（ただし規格化し、1以下で満たすようにしている）
             write(*, '(a, F7.3)', advance='no') &
-            '  | CFL:', max(maxval(U(:, :, :))*dt/dX, maxval(V(:, :, :))*dt/dY, maxval(W(:, :, :))*dt/dY)*6.0d0
+            '  | CFL:', max(maxval(U(:, :, :))*dt/dX, maxval(V(:, :, :))*dt/dY, maxval(W(:, :, :))*dt/dZ)*6.0d0
 
             ! write(*, '(a, F6.3)', advance='no') '  | index 0:', counter(0)*1.0d0/sum(counter)
             ! write(*, '(a, F6.3)', advance='no') '  1:', counter(1)*1.0d0/sum(counter)
@@ -1138,7 +1138,7 @@ contains
             enddo
             ! write(*, '(a, F7.3)', advance='no') '  | SPD:', count*1.0d0/(NX*NY*NZ)
 
-            ! write(*, '(a, e12.4)', advance='no') '  | Re_lamda:', Re_lamda
+            ! write(*, '(a, e12.4)', advance='no') '  | Re_lambda:', Re_lambda
             ! write(*, '(a, e12.4)', advance='no') '  | epsilon:', epsilon
             ! write(*, '(a, e12.4)', advance='no') '  | eta:', eta
 
@@ -1175,7 +1175,7 @@ contains
                 D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
                 D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
                 D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
-                D(:, :) = D(:, :)*U_C
+                D(:, :) = D(:, :)*U_C/L_C
 
                 E(1) = (U(i-1, j, k)+U(i, j, k))/2*U_C
                 E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
@@ -1209,7 +1209,7 @@ contains
                 D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
                 D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
                 D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
-                D(:, :) = D(:, :)*U_C
+                D(:, :) = D(:, :)*U_C/L_C
 
                 E(1) = (U(i-1, j, k)+U(i, j, k))/2*U_C
                 E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
@@ -1306,7 +1306,7 @@ contains
                     D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
                     D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
                     D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
-                    D(:, :) = D(:, :)*U_C
+                    D(:, :) = D(:, :)*U_C/L_C
 
                     Omega(1) = (D(3, 2) - D(2, 3))
                     Omega(2) = (D(1, 3) - D(3, 1))
@@ -1371,7 +1371,7 @@ contains
                     D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
                     D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
                     D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
-                    D(:, :) = D(:, :)*U_C
+                    D(:, :) = D(:, :)*U_C/L_C
 
                     Omega(1) = (D(3, 2) - D(2, 3))
                     Omega(2) = (D(1, 3) - D(3, 1))
@@ -1419,7 +1419,36 @@ module fft
     use smac
     implicit none
     include 'fftw3.f'
+    integer(8) plan1, plan2
+    real(8) Re1(1:NX, 1:NY, 1:NZ)
+    complex(8) Im1(1:NX/2+1, 1:NY, 1:NZ)
 contains
+    subroutine fft_init
+        call dfftw_plan_dft_r2c_3d(plan1, NX, NY, NZ, Re1, Im1, FFTW_ESTIMATE)
+        call dfftw_plan_dft_c2r_3d(plan2, NX, NY, NZ, Im1, Re1, FFTW_ESTIMATE)
+    end subroutine fft_init
+
+    subroutine fftr2c_3d(input, output)
+        real(8), intent(in) :: input(1:NX, 1:NY, 1:NZ)
+        complex(8), intent(out) :: output(1:NX/2+1, 1:NY, 1:NZ)
+        Re1(:, :, :) = input(:, :, :)
+        call dfftw_execute(plan1, Re1, Im1)
+        output(:, :, :) = Im1(:, :, :)
+    end subroutine fftr2c_3d
+
+    subroutine fftc2r_3d(input, output)
+        complex(8), intent(in) :: input(1:NX/2+1, 1:NY, 1:NZ)
+        real(8), intent(out) :: output(1:NX, 1:NY, 1:NZ)
+        Im1(:, :, :) = input(:, :, :)
+        call dfftw_execute(plan2, Im1, Re1)
+        output(:, :, :) = Re1(:, :, :)
+    end subroutine fftc2r_3d
+
+    subroutine fft_finalize
+        call dfftw_destroy_plan(plan1)
+        call dfftw_destroy_plan(plan2)
+    end subroutine fft_finalize
+
     subroutine fft_solve(Q, LHS, Phi)
         real(8), intent(in) :: Q(1:NX, 1:NY, 1:NZ), LHS(1:NX, 1:NY, 1:NZ)
         real(8), intent(out) :: Phi(1:NX, 1:NY, 1:NZ)
@@ -1428,9 +1457,7 @@ contains
         integer(8) plan
 
         ! 左辺をフーリエ変換
-        call dfftw_plan_dft_r2c_3d(plan, NX, NY, NZ, Q, Q_hat, FFTW_ESTIMATE)
-        call dfftw_execute(plan, Q, Q_hat)
-        call dfftw_destroy_plan(plan)
+        call fftr2c_3d(Q, Q_hat)
         
         Q_hat(:, :, :) = Q_hat(:, :, :)/(NX*NY*NZ)
 
@@ -1448,9 +1475,7 @@ contains
         enddo
 
         ! 右辺を逆フーリエ変換
-        call dfftw_plan_dft_c2r_3d(plan, NX, NY, NZ, Phi_hat, Phi, FFTW_ESTIMATE)
-        call dfftw_execute(plan, Phi_hat, Phi)
-        call dfftw_destroy_plan(plan)
+        call fftc2r_3d(Phi_hat, Phi)
 
     end subroutine fft_solve
 
@@ -1633,49 +1658,24 @@ contains
     subroutine energy_single(U, V, W, step)  ! エネルギースペクトル
         real(8), intent(in) :: U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
         integer, intent(in) :: step
-        real(8) U_tmp(0:NX+1, 0:NY+1, 0:NZ+1), V_tmp(0:NX+1, 0:NY+1, 0:NZ+1), W_tmp(0:NX+1, 0:NY+1, 0:NZ+1)
         complex(8) U_hat(1:NX/2+1, 1:NY, 1:NZ), V_hat(1:NX/2+1, 1:NY, 1:NZ), W_hat(1:NX/2+1, 1:NY, 1:NZ)
         real(8) E_tmp(1:NX/2+1, 1:NY, 1:NZ)
         real(8) K_abs(1:NX/2+1, 1:NY, 1:NZ)
         real(8) Energy(0:NX)  ! 格子数程度あれば十分
         real(8) K_energy
         integer i, j, k, index
-        integer(8) plan
         character(8) str
         real(8) kx, ky, kz
         write(str, '(I8.8)') step  ! 数値を文字列に変換
 
-        ! そのまま用いると，Energy(0)=0ではないが，そのまま求めたK_energyと一致する．
-        U_tmp(:, :, :) = U(:, :, :) * U_C
-        V_tmp(:, :, :) = V(:, :, :) * U_C
-        W_tmp(:, :, :) = W(:, :, :) * U_C
-        ! 変動成分にすると，Energy(0)=0になり，変動成分を使ったK_energyと一致する．
-        ! U_tmp(:, :, :) = U(:, :, :) - sum(U(1:NX, 1:NY, 1:NZ))/(NX*NY*NZ)
-        ! V_tmp(:, :, :) = V(:, :, :) - sum(V(1:NX, 1:NY, 1:NZ))/(NX*NY*NZ)
-        ! W_tmp(:, :, :) = W(:, :, :) - sum(W(1:NX, 1:NY, 1:NZ))/(NX*NY*NZ)
-        ! U_tmp(:, :, :) = U_tmp(:, :, :) * U_C
-        ! V_tmp(:, :, :) = V_tmp(:, :, :) * U_C
-        ! W_tmp(:, :, :) = W_tmp(:, :, :) * U_C
-
-
         ! 速度場をフーリエ変換
-        call dfftw_plan_dft_r2c_3d(plan, NX, NY, NZ, U_tmp(1:NX, 1:NY, 1:NZ), U_hat, FFTW_ESTIMATE)  ! 分けて書かないとバグった
-        call dfftw_execute(plan, U_tmp(1:NX, 1:NY, 1:NZ), U_hat)
-        call dfftw_destroy_plan(plan)
-
-        call dfftw_plan_dft_r2c_3d(plan, NX, NY, NZ, V_tmp(1:NX, 1:NY, 1:NZ), V_hat, FFTW_ESTIMATE)
-        call dfftw_execute(plan, V_tmp(1:NX, 1:NY, 1:NZ), V_hat)
-        call dfftw_destroy_plan(plan)
-
-        call dfftw_plan_dft_r2c_3d(plan, NX, NY, NZ, W_tmp(1:NX, 1:NY, 1:NZ), W_hat, FFTW_ESTIMATE)
-        call dfftw_execute(plan, W_tmp(1:NX, 1:NY, 1:NZ), W_hat)
-        call dfftw_destroy_plan(plan)
-
+        call fftr2c_3d(U(1:NX, 1:NY, 1:NZ)*U_C, U_hat)
+        call fftr2c_3d(V(1:NX, 1:NY, 1:NZ)*U_C, V_hat)
+        call fftr2c_3d(W(1:NX, 1:NY, 1:NZ)*U_C, W_hat)
         ! 格子点数で割る
         U_hat(:, :, :) = U_hat(:, :, :)/dble(NX*NY*NZ)
         V_hat(:, :, :) = V_hat(:, :, :)/dble(NX*NY*NZ)
         W_hat(:, :, :) = W_hat(:, :, :)/dble(NX*NY*NZ)
-
 
         ! 配列要素に対するエネルギー
         do k = 1, NZ
@@ -1724,8 +1724,8 @@ contains
 
 
         ! 運動エネルギーとエネルギーカスケードの総和
-        K_energy = sum(U_tmp(1:NX, 1:NY, 1:NZ)**2.0d0) + sum(V_tmp(1:NX, 1:NY, 1:NZ)**2.0d0) + sum(W_tmp(1:NX, 1:NY, 1:NZ)**2.0d0)
-        K_energy = K_energy/2.d0
+        K_energy = sum(U(1:NX, 1:NY, 1:NZ)**2) + sum(V(1:NX, 1:NY, 1:NZ)**2) + sum(W(1:NX, 1:NY, 1:NZ)**2)
+        K_energy = K_energy*U_C**2/2
         K_energy = K_energy/(NX*NY*NZ)
         write(*, '(I6, 5e12.4)') step, K_energy, sum(Energy(:)), K_energy-sum(Energy(:)), Energy(0), K_energy/sum(Energy(:))   ! 一致するはず
         ! open(30, file = 'fft/energy_time.d', position='append')
@@ -1733,6 +1733,78 @@ contains
         ! close(30)
 
     end subroutine energy_single
+
+    subroutine scale_vtk(U, V, W, step)  ! 渦のスケール分解
+        real(8), intent(in) :: U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
+        integer, intent(in) :: step
+        complex(8) U_hat(1:NX/2+1, 1:NY, 1:NZ), V_hat(1:NX/2+1, 1:NY, 1:NZ), W_hat(1:NX/2+1, 1:NY, 1:NZ)
+        complex(8) U_hat_scale(3, 1:NX/2+1, 1:NY, 1:NZ)
+        complex(8) V_hat_scale(3, 1:NX/2+1, 1:NY, 1:NZ)
+        complex(8) W_hat_scale(3, 1:NX/2+1, 1:NY, 1:NZ)
+        real(8) U_tmp(0:NX+1, 0:NY+1, 0:NZ+1), V_tmp(0:NX+1, 0:NY+1, 0:NZ+1), W_tmp(0:NX+1, 0:NY+1, 0:NZ+1)
+        real(8) K_abs(1:NX/2+1, 1:NY, 1:NZ)
+        integer i, j, k, index, count(3)
+        real(8) kx, ky, kz
+
+        ! 速度場をフーリエ変換
+        call fftr2c_3d(U(1:NX, 1:NY, 1:NZ), U_hat)  ! U_Cはvtk出力の際にかけられる
+        call fftr2c_3d(V(1:NX, 1:NY, 1:NZ), V_hat)
+        call fftr2c_3d(W(1:NX, 1:NY, 1:NZ), W_hat)
+        ! 格子点数で割る
+        U_hat(:, :, :) = U_hat(:, :, :)/dble(NX*NY*NZ)
+        V_hat(:, :, :) = V_hat(:, :, :)/dble(NX*NY*NZ)
+        W_hat(:, :, :) = W_hat(:, :, :)/dble(NX*NY*NZ)
+
+        ! 配列要素に対する波数
+        do k = 1, NZ
+            do j = 1, NY
+                do i = 1, NX/2+1
+                    ! 0, 1, 2, ..., 63, 64, -63, -62, ..., -3, -2, -1
+                    kx = sign(1.0d0, dble(NX + 3)/2.0d0 - dble(i)) * (- dble(abs(NX/2 + 1 - i)) + dble(NX)/2.0d0)  ! 増田さん参考
+                    ky = sign(1.0d0, dble(NY + 3)/2.0d0 - dble(j)) * (- dble(abs(NY/2 + 1 - j)) + dble(NY)/2.0d0)
+                    kz = sign(1.0d0, dble(NZ + 3)/2.0d0 - dble(k)) * (- dble(abs(NZ/2 + 1 - k)) + dble(NZ)/2.0d0)
+                    K_abs(i, j, k) = sqrt(kx**2.0d0 + ky**2.0d0 + kz**2.0d0)
+                enddo
+            enddo
+        enddo
+
+        ! バンドパスフィルタ
+        U_hat_scale(:, :, :, :) = 0.0d0
+        V_hat_scale(:, :, :, :) = 0.0d0
+        W_hat_scale(:, :, :, :) = 0.0d0
+        ! count(:) = 0
+        do k = 1, NZ
+            do j = 1, NY
+                do i = 1, NX/2+1
+                    do index = 1, 3
+                        if (2**(index-1) <= K_abs(i, j, k) .and. K_abs(i, j, k) < 2**index) then
+                            U_hat_scale(index, i, j, k) = U_hat(i, j, k)
+                            V_hat_scale(index, i, j, k) = V_hat(i, j, k)
+                            W_hat_scale(index, i, j, k) = W_hat(i, j, k)
+                            ! count(index) = count(index) + 1
+                        endif
+                    enddo
+                enddo
+            enddo
+        enddo
+        do index = 1, 3
+            call fftc2r_3d(U_hat_scale(index, :, :, :), U_tmp(1:NX, 1:NY, 1:NZ))
+            call fftc2r_3d(V_hat_scale(index, :, :, :), V_tmp(1:NX, 1:NY, 1:NZ))
+            call fftc2r_3d(W_hat_scale(index, :, :, :), W_tmp(1:NX, 1:NY, 1:NZ))
+            call PBM(U_tmp)
+            call PBM(V_tmp)
+            call PBM(W_tmp)
+            call vtk_binary(U_tmp, V_tmp, W_tmp, step + index*10000000)
+        enddo
+
+        ! call fftc2r_3d(U_hat(:, :, :), U_tmp(1:NX, 1:NY, 1:NZ))
+        ! call fftc2r_3d(V_hat(:, :, :), V_tmp(1:NX, 1:NY, 1:NZ))
+        ! call fftc2r_3d(W_hat(:, :, :), W_tmp(1:NX, 1:NY, 1:NZ))
+        ! write(*, *) sqrt(sum((U_tmp(1:NX, 1:NY, 1:NZ) - U(1:NX, 1:NY, 1:NZ))**2) &
+        !                + sum((V_tmp(1:NX, 1:NY, 1:NZ) - V(1:NX, 1:NY, 1:NZ))**2) &
+        !                + sum((W_tmp(1:NX, 1:NY, 1:NZ) - W(1:NX, 1:NY, 1:NZ))**2))/(NX*NY*NZ)
+        ! write(*, *) count(:)
+    end subroutine scale_vtk
 end module fft
 
 module ibm
@@ -1835,14 +1907,14 @@ contains
                 Yc(3, j, :) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
                 Xc(4, j, :) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
                 Yc(4, j, :) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
-                Uc(1, j, :) = -sin(2*PI/NL*j)
-                Vc(1, j, :) = cos(2*PI/NL*j)
-                Uc(2, j, :) = sin(2*PI/NL*j)
-                Vc(2, j, :) = -cos(2*PI/NL*j)
-                Uc(3, j, :) = sin(2*PI/NL*j)
-                Vc(3, j, :) = -cos(2*PI/NL*j)
-                Uc(4, j, :) = -sin(2*PI/NL*j)
-                Vc(4, j, :) = cos(2*PI/NL*j)
+                Uc(1, j, :) = sin(2*PI/NL*j)
+                Vc(1, j, :) = -cos(2*PI/NL*j)
+                Uc(2, j, :) = -sin(2*PI/NL*j)
+                Vc(2, j, :) = cos(2*PI/NL*j)
+                Uc(3, j, :) = -sin(2*PI/NL*j)
+                Vc(3, j, :) = cos(2*PI/NL*j)
+                Uc(4, j, :) = sin(2*PI/NL*j)
+                Vc(4, j, :) = -cos(2*PI/NL*j)
             enddo
         endif   
         if (ibm_type == 13) then
@@ -1855,14 +1927,14 @@ contains
                 Yc(3, j, :) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
                 Xc(4, j, :) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
                 Yc(4, j, :) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
-                Uc(1, j, :) = -sin(2*PI/NL*j)
-                Vc(1, j, :) = cos(2*PI/NL*j)
-                Uc(2, j, :) = sin(2*PI/NL*j)
-                Vc(2, j, :) = -cos(2*PI/NL*j)
-                Uc(3, j, :) = sin(2*PI/NL*j)
-                Vc(3, j, :) = -cos(2*PI/NL*j)
-                Uc(4, j, :) = -sin(2*PI/NL*j)
-                Vc(4, j, :) = cos(2*PI/NL*j)
+                Uc(1, j, :) = sin(2*PI/NL*j)
+                Vc(1, j, :) = -cos(2*PI/NL*j)
+                Uc(2, j, :) = -sin(2*PI/NL*j)
+                Vc(2, j, :) = cos(2*PI/NL*j)
+                Uc(3, j, :) = -sin(2*PI/NL*j)
+                Vc(3, j, :) = cos(2*PI/NL*j)
+                Uc(4, j, :) = sin(2*PI/NL*j)
+                Vc(4, j, :) = -cos(2*PI/NL*j)
             enddo
         endif
         if (ibm_type == 21) then
@@ -1878,14 +1950,14 @@ contains
                     Yc(3, index, :) = 2*PI*3/4 + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
                     Xc(4, index, :) = 2*PI*3/4 + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
                     Yc(4, index, :) = 2*PI*3/4 + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
-                    Uc(1, index, :) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
-                    Vc(1, index, :) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
-                    Uc(2, index, :) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
-                    Vc(2, index, :) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
-                    Uc(3, index, :) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
-                    Vc(3, index, :) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
-                    Uc(4, index, :) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
-                    Vc(4, index, :) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc(1, index, :) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(1, index, :) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc(2, index, :) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(2, index, :) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc(3, index, :) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(3, index, :) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc(4, index, :) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(4, index, :) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
                 enddo
             enddo
         endif
@@ -2117,6 +2189,10 @@ contains
             enddo
         enddo
 
+        Fxc(:, :, :) = 1.0d0
+        Fyc(:, :, :) = 1.0d0
+        Fzc(:, :, :) = 1.0d0
+
         fxtmp(:, :, :) = 0.0d0
         fytmp(:, :, :) = 0.0d0
         fztmp(:, :, :) = 0.0d0
@@ -2129,7 +2205,7 @@ contains
                             do i = int(Xc(l, m, n)/dX - 0.5d0), int(Xc(l, m, n)/dX - 0.5d0) + 2
                                 fxtmp(i, j, k) = fxtmp(i, j, k) &
                                                + Fxc(l, m, n) * delta(X(i, j, k)+0.5d0*dX, Y(i, j, k), Z(i, j, k), &
-                                                                      Xc(l, m, n), Yc(l, m, n), Zc(l, m, n)) * dV
+                                                                      Xc(l, m, n), Yc(l, m, n), Zc(l, m, n)) * dX**3
                                 ! count3d(i, j, k) = count3d(i, j, k) + 1
                             enddo
                         enddo
@@ -2139,7 +2215,7 @@ contains
                             do i = int(Xc(l, m, n)/dX), int(Xc(l, m, n)/dX) + 2
                                 fytmp(i, j, k) = fytmp(i, j, k) &
                                                + Fyc(l, m, n) * delta(X(i, j, k), Y(i, j, k)+0.5d0*dY, Z(i, j, k), &
-                                                                      Xc(l, m, n), Yc(l, m, n), Zc(l, m, n)) * dV
+                                                                      Xc(l, m, n), Yc(l, m, n), Zc(l, m, n)) * dX**3
                             enddo
                         enddo
                     enddo
@@ -2148,13 +2224,20 @@ contains
                             do i = int(Xc(l, m, n)/dX), int(Xc(l, m, n)/dX) + 2
                                 fztmp(i, j, k) = fztmp(i, j, k) &
                                                + Fzc(l, m, n) * delta(X(i, j, k), Y(i, j, k), Z(i, j, k)+0.5d0*dZ, &
-                                                                      Xc(l, m, n), Yc(l, m, n), Zc(l, m, n)) * dV
+                                                                      Xc(l, m, n), Yc(l, m, n), Zc(l, m, n)) * dX**3
                             enddo
                         enddo
                     enddo
                 enddo
             enddo
         enddo
+
+        ! write(*, *) sum(fxtmp)/(NZ*NL*NC)
+        ! write(*, *) sum(fytmp)/(NZ*NL*NC)
+        ! write(*, *) sum(fztmp)/(NZ*NL*NC)
+        write(*, *) sum(fxtmp)/(NX*NY*NZ)
+        write(*, *) sum(fytmp)/(NX*NY*NZ)
+        write(*, *) sum(fztmp)/(NX*NY*NZ)
 
         ! do k = 0, NZ+1
         !     do j = 0, NY+1
@@ -2289,6 +2372,7 @@ program main
     t34 = 0.0d0
     t45 = 0.0d0
 
+    call fft_init
     call init(U, V, W, P, Phi, C, Fx, Fy, Fz)
     if (input_step > 0) call input(U, V, W, P, C, Ax0, Ay0, Az0, Tx0, Ty0, Tz0)
     if (method == 2) call ibm_init(X, Y, Z, Xc, Yc, Zc, Uc, Vc, Wc, Fxc, Fyc, Fzc)
@@ -2367,6 +2451,7 @@ program main
         
         call logging(U, V, W, C, step, t_start)
         if (mod(step, Gstep)==0) call vtk_binary(U, V, W, step)
+        if (mod(step, Gstep)==0) call scale_vtk(U, V, W, step)
         ! if (mod(step, Gstep)==0) call vtk_ascii(U, V, W, 1000)
         ! if (mod(step, Gstep)==0) call get_data(U, V, W, C, step)
         ! if (mod(step, Gstep)==0) call get_data_xy(U, V, W, C, step)
@@ -2383,6 +2468,7 @@ program main
         ! write(*, '(12e12.4)') U(1:12, 1, 1)
     enddo
 
+    call fft_finalize
     call cpu_time(t_end)
     total_time = t_end-t_start
     others_time = total_time - (t12+t23+t34+t45)

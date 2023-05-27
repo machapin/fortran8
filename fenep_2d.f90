@@ -2,8 +2,8 @@ module smac
     implicit none
     ! gfortran fenep_2d.f90 -I$HOME/local/include -L$HOME/local/lib -lfftw3 && ./a.out
     ! ステップ数
-    integer, parameter :: Nstep = 100000
-    integer, parameter :: Gstep = 1000000  ! データを取得する間隔
+    integer, parameter :: Nstep = 1
+    integer, parameter :: Gstep = 10  ! データを取得する間隔
     integer, parameter :: Estep = 1000000  ! エネルギースペクトルを取得する間隔
     integer, parameter :: Dstep = 200  ! デバッグする間隔
     integer, parameter :: input_step = 0  ! 0以外で初期条件をファイルから読み込む
@@ -12,10 +12,10 @@ module smac
     ! パラメータ
     integer, parameter :: NX = 192, NY = NX
     real(8), parameter :: dX = 2*PI/NX, dY = 2*PI/NY  ! 規格化長さは2*PI
-    real(8), parameter :: dt = 0.002d0
+    real(8), parameter :: dt = 0.005d0
     ! 手法
     integer, parameter :: method = 2  ! 0:陽解法、1:FFT、2:IBM、3:固体壁
-    integer, parameter :: ibm_type = 21  ! 1:壁表面、2:壁の中全て、3:壁の中半分、11:円柱表面1つ、12:円柱表面4つ(直径:2*PI/8.0d0)、13:円柱表面4つ(直径:2*PI/6.0d0)、21:円柱内部4つ(直径:2*PI/6.0d0)
+    integer, parameter :: ibm_type = 21  ! 1:壁表面、2:壁の中全て、3:壁の中半分、11:円柱表面1つ(直径:2*PI/3.0d0)、12:円柱表面4つ(直径:2*PI/8.0d0)、13:円柱表面4つ(直径:2*PI/6.0d0)、21:円柱内部4つ(直径:2*PI/6.0d0)、22:円柱内部1つ（直径:2*PI/3.0d0）
     integer, parameter :: flow_type = 0  ! 0:外力なし(f=0)、1:クエット流れ(Uwall=1)、2:ポアズイユ流れ(fx=1)、3:テイラーグリーン外力、4:テイラーグリーン渦の減衰
     integer, parameter :: eigen_method = 0  ! 0:固有値計算、1:SPDならindex3
     ! 無次元パラメータ
@@ -31,14 +31,14 @@ module smac
     integer, parameter :: f_C = 2  ! 円柱回転速度[rps]
     real(8), parameter :: D_C = 0.03d0  ! 円柱直径[m]
     real(8), parameter :: U_C = f_C * PI * D_C  ! 代表速度
-    real(8), parameter :: L_C = D_C / (2*PI/6.0d0)  ! 代表長さ
+    real(8), parameter :: L_C = D_C / (2*PI/6.0d0)  ! 代表長さ  ! 分母はDCであるべき
     real(8), parameter :: nu = 1.0d-6  ! 動粘性係数
     real(8), parameter :: Re = U_C*L_C/nu
     ! その他のパラメータ
     real(8), parameter :: dX_C = dX*L_C, dY_C = dY*L_C
     real(8), parameter :: dt_C = dt*L_C/U_C
     ! グローバル変数
-    character(64) :: dir = './data/'
+    character(64) :: dir = './tmp/'
     real(8) counter(0:3)
 
 contains
@@ -65,12 +65,12 @@ contains
 
         ! write(*, '(a, F8.3, F8.3, a8)') 'Von Neumann:', 1.0d0/Re*dt/dX**2, 1.0d0/Re*dt/dY**2, '< 0.167'
         write(*, '(a, F8.3, F8.3, a8)') 'CFL:', 1.0d0*dt/dX*6.0d0, 1.0d0*dt/dY*6.0d0,'< 1.0'
-        ! write(*, '(a, F8.3)') 'L_C =', L_C
-        ! write(*, '(a, F8.3)') 'D_C =', D_C
-        ! write(*, '(a, F8.3)') 'U_C =', U_C
-        ! write(*, '(a, E12.4)') 'nu =', nu
-        write(*, '(a, F8.3)') 'Re  =', Re
+        write(*, '(a, F8.3)') 'L_C =', L_C
+        write(*, '(a, F8.3)') 'U_C =', U_C
+        write(*, '(a, E12.4)') 'nu =', nu
+        write(*, '(a, F10.3)') 'Re  =', Re
         write(*, '(a, E12.4)') 'dt_C =', dt_C
+        write(*, '(a, E12.4)') 'dX_C =', dX_C
         write(*, '(a, F8.3)') 'step /[s]=', 1.0d0/dt_C
 
         ! 初期条件（Taylor-Green）
@@ -655,7 +655,7 @@ contains
                 D(1, 2) = (U(i, j+1) - U(i, j-1) + U(i-1, j+1) - U(i-1, j-1))/(4*dY)
                 D(2, 1) = (V(i+1, j) - V(i-1, j) + V(i+1, j-1) - V(i-1, j-1))/(4*dX)
                 D(2, 2) = (V(i, j) - V(i, j-1))/dY
-                D(:, :) = D(:, :)*U_C
+                D(:, :) = D(:, :)*U_C/L_C
 
                 E(1) = (U(i-1, j)+U(i, j))/2*U_C
                 E(2) = (V(i, j-1)+V(i, j))/2*U_C
@@ -1477,7 +1477,7 @@ contains
         endif
         if (ibm_type == 11) then  ! 円柱表面1つ
             NC = 1
-            DC = 2*PI/6.0d0
+            DC = 2*PI/3.0d0
             NL = nint(PI*DC/dX)
             dV = PI*DC/NL * dX
         endif
@@ -1504,6 +1504,19 @@ contains
             if (NL_shell(NL_lap) == 0) NL_shell(NL_lap) = 1  ! 中心に外力点を1つ置く
             NL = sum(NL_shell)
             dV = PI*(DC+dX)**2/4 / NL
+            write(*, '(a, 100I5)') 'NL_shell:  ', NL_shell(:)
+        endif
+        if (ibm_type == 22) then  ! 円柱内部1つ（直径:2*PI/3.0d0）
+            NC = 1
+            DC = 2*PI/3.0d0
+            NL_lap = int(DC/(2*dX))  ! 円柱内部の殻数
+            allocate(NL_shell(0:NL_lap))
+            do i = 0, NL_lap
+                NL_shell(i) = nint(PI*(DC-2*i*dX)/dX)
+            enddo
+            if (NL_shell(NL_lap) == 0) NL_shell(NL_lap) = 1  ! 中心に外力点を1つ置く
+            NL = sum(NL_shell)
+            dV = PI*(DC+dX)**2/4 / NL * dX
             write(*, '(a, 100I5)') 'NL_shell:  ', NL_shell(:)
         endif
 
@@ -1584,7 +1597,9 @@ contains
         endif
         if (ibm_type == 11) then
             do j = 1, NL
-                Xc(1, j) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
+                ! Xc(1, j) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
+                ! Yc(1, j) = 2*PI/2 + DC/2 * sin(2*PI/NL*j)
+                Xc(1, j) = 2*PI/2 + DC/2 * cos(2*PI/NL*j)  ! 中心に配置
                 Yc(1, j) = 2*PI/2 + DC/2 * sin(2*PI/NL*j)
             enddo
         endif
@@ -1598,14 +1613,14 @@ contains
                 Yc(3, j) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
                 Xc(4, j) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
                 Yc(4, j) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
-                Uc(1, j) = -sin(2*PI/NL*j)
-                Vc(1, j) = cos(2*PI/NL*j)
-                Uc(2, j) = sin(2*PI/NL*j)
-                Vc(2, j) = -cos(2*PI/NL*j)
-                Uc(3, j) = sin(2*PI/NL*j)
-                Vc(3, j) = -cos(2*PI/NL*j)
-                Uc(4, j) = -sin(2*PI/NL*j)
-                Vc(4, j) = cos(2*PI/NL*j)
+                Uc(1, j) = sin(2*PI/NL*j)
+                Vc(1, j) = -cos(2*PI/NL*j)
+                Uc(2, j) = -sin(2*PI/NL*j)
+                Vc(2, j) = cos(2*PI/NL*j)
+                Uc(3, j) = -sin(2*PI/NL*j)
+                Vc(3, j) = cos(2*PI/NL*j)
+                Uc(4, j) = sin(2*PI/NL*j)
+                Vc(4, j) = -cos(2*PI/NL*j)
             enddo
         endif   
         if (ibm_type == 13) then
@@ -1618,14 +1633,14 @@ contains
                 Yc(3, j) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
                 Xc(4, j) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
                 Yc(4, j) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
-                Uc(1, j) = -sin(2*PI/NL*j)
-                Vc(1, j) = cos(2*PI/NL*j)
-                Uc(2, j) = sin(2*PI/NL*j)
-                Vc(2, j) = -cos(2*PI/NL*j)
-                Uc(3, j) = sin(2*PI/NL*j)
-                Vc(3, j) = -cos(2*PI/NL*j)
-                Uc(4, j) = -sin(2*PI/NL*j)
-                Vc(4, j) = cos(2*PI/NL*j)
+                Uc(1, j) = sin(2*PI/NL*j)
+                Vc(1, j) = -cos(2*PI/NL*j)
+                Uc(2, j) = -sin(2*PI/NL*j)
+                Vc(2, j) = cos(2*PI/NL*j)
+                Uc(3, j) = -sin(2*PI/NL*j)
+                Vc(3, j) = cos(2*PI/NL*j)
+                Uc(4, j) = sin(2*PI/NL*j)
+                Vc(4, j) = -cos(2*PI/NL*j)
             enddo
         endif
         if (ibm_type == 21) then
@@ -1641,14 +1656,26 @@ contains
                     Yc(3, index) = 2*PI*3/4 + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
                     Xc(4, index) = 2*PI*3/4 + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
                     Yc(4, index) = 2*PI*3/4 + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
-                    Uc(1, index) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
-                    Vc(1, index) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
-                    Uc(2, index) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
-                    Vc(2, index) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
-                    Uc(3, index) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
-                    Vc(3, index) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
-                    Uc(4, index) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
-                    Vc(4, index) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc(1, index) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(1, index) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc(2, index) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(2, index) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc(3, index) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(3, index) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc(4, index) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(4, index) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                enddo
+            enddo
+        endif
+        if (ibm_type == 22) then
+            index = 0
+            do i = 0, NL_lap
+                do j = 1, NL_shell(i)
+                    index = index + 1
+                    Xc(1, index) = 2*PI/2   + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc(1, index) = 2*PI/2   + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Uc(1, index) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(1, index) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
                 enddo
             enddo
         endif
@@ -1802,14 +1829,14 @@ contains
                 do j = int(Yc(l, m)/dY), int(Yc(l, m)/dY) + 2
                     do i = int(Xc(l, m)/dX - 0.5d0), int(Xc(l, m)/dX - 0.5d0) + 2
                         fxtmp(i, j) = fxtmp(i, j) &
-                                    + Fxc(l, m) * delta(X(i, j)+0.5d0*dX, Y(i, j), Xc(l, m), Yc(l, m)) * dV
+                                    + Fxc(l, m) * delta(X(i, j)+0.5d0*dX, Y(i, j), Xc(l, m), Yc(l, m)) * dX**2
                         ! count2d(i, j) = count2d(i, j) + 1
                     enddo
                 enddo
                 do j = int(Yc(l, m)/dY - 0.5d0), int(Yc(l, m)/dY - 0.5d0) + 2
                     do i = int(Xc(l, m)/dX), int(Xc(l, m)/dX) + 2
                         fytmp(i, j) = fytmp(i, j) &
-                                    + Fyc(l, m) * delta(X(i, j), Y(i, j)+0.5d0*dY, Xc(l, m), Yc(l, m)) * dV
+                                    + Fyc(l, m) * delta(X(i, j), Y(i, j)+0.5d0*dY, Xc(l, m), Yc(l, m)) * dX**2
                     enddo
                 enddo
             enddo

@@ -1,15 +1,15 @@
 module smac
     implicit none
     ! module load fftw
-    ! mpifrtpx mpi_fenep.f90 -lfftw3 -SSL2 -O3
+    ! mpifrtpx fenep_mpi.f90 -lfftw3 -SSL2 -O3
     ! jxsub run.sh
     include 'mpif.h'
     ! ステップ数
-    integer, parameter :: Nstep = 100000
-    integer, parameter :: Gstep = 1000  ! データを取得する間隔
-    integer, parameter :: Estep = 50000  ! エネルギースペクトルを取得する間隔
-    integer, parameter :: Dstep = 500  ! デバッグする間隔
-    integer, parameter :: input_step = 0  ! 0:初期条件なし、1以上:初期条件あり
+    integer, parameter :: Nstep = 50000
+    integer, parameter :: Gstep = 200  ! データを取得する間隔
+    integer, parameter :: Estep = 10000  ! エネルギースペクトルを取得する間隔
+    integer, parameter :: Dstep = 200  ! デバッグする間隔
+    integer, parameter :: input_step = 1  ! 0:初期条件なし、1以上:初期条件あり
     integer, parameter :: output_step = 10000  ! 配列を保存する間隔
     real(8), parameter :: PI = acos(-1.0d0)
     ! パラメータ
@@ -18,7 +18,7 @@ module smac
     real(8), parameter :: dt = 0.002d0
     ! 手法
     integer, parameter :: method = 2  ! 0:陽解法、1:FFT、2:IBM、3:IBM定量的に比較(inputを0以外に)
-    integer, parameter :: ibm_type = 21  ! 11:円柱表面1つ、12:円柱表面4つ(直径:2*PI/8.0d0)、13:円柱表面4つ(直径:2*PI/6.0d0)、21:円柱内部4つ(直径:2*PI/6.0d0)
+    integer, parameter :: ibm_type = 21  ! 11:円柱表面1つ、12:円柱表面4つ(直径:2*PI/8.0d0)、13:円柱表面4つ(直径:2*PI/6.0d0)、21:円柱内部4つ(直径:2*PI/6.0d0)、22:円柱内部1つ（直径:2*PI/3.0d0）
     integer, parameter :: flow_type = 0  ! 0:外力なし(f=0)、3:テイラーグリーン外力、4:テイラーグリーン渦の減衰
     integer, parameter :: eigen_method = 2  ! 0:カルダノ、1:シルベスター、2:LAPACK
     ! 無次元パラメータ
@@ -39,14 +39,14 @@ module smac
     integer, parameter :: f_C = 2  ! 円柱回転速度[rps]
     real(8), parameter :: D_C = 0.03d0  ! 円柱直径[m]
     real(8), parameter :: U_C = f_C * PI * D_C  ! 代表速度
-    real(8), parameter :: L_C = D_C / (2*PI/6.0d0)  ! 代表長さ
+    real(8), parameter :: L_C = D_C / (2*PI/6.0d0)  ! 代表長さ  ! ここDCを使って書きたいけど…
     real(8), parameter :: nu = 1.0d-6  ! 動粘性係数
     real(8), parameter :: Re = U_C*L_C/nu
     ! その他のパラメータ
     real(8), parameter :: dX_C = dX*L_C, dY_C = dY*L_C, dZ_C = dZ*L_C
     real(8), parameter :: dt_C = dt*L_C/U_C
     ! その他
-    character(64) :: dir = './data/'  ! outファイルとは別のところに保存
+    character(64) :: dir = './data2/'  ! outファイルとは別のところに保存
     real(8) counter(0:3)
     ! LAPACK用変数
     integer :: info
@@ -985,196 +985,27 @@ contains
     end subroutine march
 
 
-    ! subroutine get_data(U_procs, V_procs, W_procs, C_procs, step)
-    !     real(8), intent(in) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
-    !     real(8), intent(in) :: C_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1)
-    !     integer, intent(in) :: step
-    !     real(8) U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
-    !     real(8) C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
-    !     integer i, j, k
-    !     real(8) D(3, 3), Omega(3), S(3), Qti, trC, E(3)
-    !     character(8) str
-        
-    !     call MPI_Gather(U_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, U(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Gather(V_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, V(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Gather(W_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, W(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Gather(C_procs(1, 0, 0, 1), 6*(NX+2)*(NY+2)*N_procs, MPI_REAL8, C(1, 0, 0, 1), 6*(NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     U(:, :, 0) = U(:, :, NZ)
-    !     U(:, :, NZ+1) = U(:, :, 1)
-    !     V(:, :, 0) = V(:, :, NZ)
-    !     V(:, :, NZ+1) = V(:, :, 1)
-    !     W(:, :, 0) = W(:, :, NZ)
-    !     W(:, :, NZ+1) = W(:, :, 1)
-    !     C(:, :, :, 0) = C(:, :, :, NZ)
-    !     C(:, :, :, NZ+1) = C(:, :, :, 1)
-
-    !     if (myrank == 0) then
-    !         write(str, '(I8.8)') step
-    !         open(30, file = trim(dir)//'all_'//str//'.d')
-    !         do k = 1, NZ
-    !             do j = 1, NY
-    !                 do i = 1, NX
-    !                     D(1, 1) = (U(i, j, k) - U(i-1, j, k))/dX
-    !                     D(1, 2) = (U(i, j+1, k) - U(i, j-1, k) + U(i-1, j+1, k) - U(i-1, j-1, k))/(4*dY)
-    !                     D(1, 3) = (U(i, j, k+1) - U(i, j, k-1) + U(i-1, j, k+1) - U(i-1, j, k-1))/(4*dZ)
-    !                     D(2, 1) = (V(i+1, j, k) - V(i-1, j, k) + V(i+1, j-1, k) - V(i-1, j-1, k))/(4*dX)
-    !                     D(2, 2) = (V(i, j, k) - V(i, j-1, k))/dY
-    !                     D(2, 3) = (V(i, j, k+1) - V(i, j, k-1) + V(i, j-1, k+1) - V(i, j-1, k-1))/(4*dZ)
-    !                     D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
-    !                     D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
-    !                     D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
-    !                     D(:, :) = D(:, :)*U_C
-        
-    !                     Omega(1) = (D(3, 2) - D(2, 3))
-    !                     Omega(2) = (D(1, 3) - D(3, 1))
-    !                     Omega(3) = (D(2, 1) - D(1, 2))
-    !                     S(1) = (D(3, 2) + D(2, 3))
-    !                     S(2) = (D(1, 3) + D(3, 1))
-    !                     S(3) = (D(2, 1) + D(1, 2))
-    !                     E(1) = (U(i-1, j, k)+U(i, j, k))/2*U_C
-    !                     E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
-    !                     E(3) = (W(i, j, k-1)+W(i, j, k))/2*U_C
-    !                     Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
-    !                     trC = C(1, i, j, k) + C(4, i, j, k) + C(6, i, j, k)
-    !                     write(30, *) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, &
-    !                                            E(1), E(2), E(3), &
-    !                                            Omega(3), sum(Omega**2)/2, sum(S**2)/2, sum(E**2)/2, Qti, &
-    !                                            trC, &
-    !                                            C(1, i, j, k), C(2, i, j, k), C(3, i, j, k), C(4, i, j, k), C(5, i, j, k), C(6, i, j, k)
-    !                 enddo
-    !             enddo
-    !         enddo
-    !         close(30)
-
-
-    !         open(10, file = trim(dir)//'z_'//str//'.d')
-    !         k = NZ/2  ! x-y平面
-    !         do j = 1, NY
-    !             do i = 1, NX
-    !                 D(1, 1) = (U(i, j, k) - U(i-1, j, k))/dX
-    !                 D(1, 2) = (U(i, j+1, k) - U(i, j-1, k) + U(i-1, j+1, k) - U(i-1, j-1, k))/(4*dY)
-    !                 D(1, 3) = (U(i, j, k+1) - U(i, j, k-1) + U(i-1, j, k+1) - U(i-1, j, k-1))/(4*dZ)
-    !                 D(2, 1) = (V(i+1, j, k) - V(i-1, j, k) + V(i+1, j-1, k) - V(i-1, j-1, k))/(4*dX)
-    !                 D(2, 2) = (V(i, j, k) - V(i, j-1, k))/dY
-    !                 D(2, 3) = (V(i, j, k+1) - V(i, j, k-1) + V(i, j-1, k+1) - V(i, j-1, k-1))/(4*dZ)
-    !                 D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
-    !                 D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
-    !                 D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
-    !                 D(:, :) = D(:, :)*U_C
-    
-    !                 Omega(1) = (D(3, 2) - D(2, 3))
-    !                 Omega(2) = (D(1, 3) - D(3, 1))
-    !                 Omega(3) = (D(2, 1) - D(1, 2))
-    !                 S(1) = (D(3, 2) + D(2, 3))
-    !                 S(2) = (D(1, 3) + D(3, 1))
-    !                 S(3) = (D(2, 1) + D(1, 2))
-    !                 E(1) = (U(i-1, j, k)+U(i, j, k))/2*U_C
-    !                 E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
-    !                 E(3) = (W(i, j, k-1)+W(i, j, k))/2*U_C
-    !                 Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
-    !                 trC = C(1, i, j, k) + C(4, i, j, k) + C(6, i, j, k)
-    !                 write(10, *) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, &
-    !                                        E(1), E(2), E(3), &
-    !                                        Omega(3), sum(Omega**2)/2, sum(S**2)/2, sum(E**2)/2, Qti, &
-    !                                        trC, &
-    !                                        C(1, i, j, k), C(2, i, j, k), C(3, i, j, k), C(4, i, j, k), C(5, i, j, k), C(6, i, j, k)
-    !             enddo
-    !         enddo
-    !         close(10)
-
-
-    !         open(20, file = trim(dir)//'y_'//str//'.d')
-    !         j = NY/2  ! x-z平面
-    !         do k = 1, NZ
-    !             do i = 1, NX
-    !                 D(1, 1) = (U(i, j, k) - U(i-1, j, k))/dX
-    !                 D(1, 2) = (U(i, j+1, k) - U(i, j-1, k) + U(i-1, j+1, k) - U(i-1, j-1, k))/(4*dY)
-    !                 D(1, 3) = (U(i, j, k+1) - U(i, j, k-1) + U(i-1, j, k+1) - U(i-1, j, k-1))/(4*dZ)
-    !                 D(2, 1) = (V(i+1, j, k) - V(i-1, j, k) + V(i+1, j-1, k) - V(i-1, j-1, k))/(4*dX)
-    !                 D(2, 2) = (V(i, j, k) - V(i, j-1, k))/dY
-    !                 D(2, 3) = (V(i, j, k+1) - V(i, j, k-1) + V(i, j-1, k+1) - V(i, j-1, k-1))/(4*dZ)
-    !                 D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
-    !                 D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
-    !                 D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
-    !                 D(:, :) = D(:, :)*U_C
-    
-    !                 Omega(1) = (D(3, 2) - D(2, 3))
-    !                 Omega(2) = (D(1, 3) - D(3, 1))
-    !                 Omega(3) = (D(2, 1) - D(1, 2))
-    !                 S(1) = (D(3, 2) + D(2, 3))
-    !                 S(2) = (D(1, 3) + D(3, 1))
-    !                 S(3) = (D(2, 1) + D(1, 2))
-    !                 E(1) = (U(i-1, j, k)+U(i, j, k))/2*U_C
-    !                 E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
-    !                 E(3) = (W(i, j, k-1)+W(i, j, k))/2*U_C
-    !                 Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
-    !                 trC = C(1, i, j, k) + C(4, i, j, k) + C(6, i, j, k)
-    !                 write(20, *) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, &
-    !                                        E(1), E(2), E(3), &
-    !                                        Omega(2), sum(Omega**2)/2, sum(S**2)/2, sum(E**2)/2, Qti, &
-    !                                        trC, &
-    !                                        C(1, i, j, k), C(2, i, j, k), C(3, i, j, k), C(4, i, j, k), C(5, i, j, k), C(6, i, j, k)
-    !             enddo
-    !         enddo
-    !         close(20)
-    !     endif
-    ! end subroutine get_data
-
     subroutine logging(U_procs, V_procs, W_procs, C_procs, step, time1)
         real(8), intent(in) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
         real(8), intent(in) :: C_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1), time1
         integer, intent(in) :: step
         integer i, j, k, count, count_sum
         real(8) K_energy, K_energy_sum
-        real(8) trC_procs(1:NX, 1:NY, 1:N_procs), trC(1:NX, 1:NY, 1:NZ)
+        real(8) trC_procs(1:NX, 1:NY, 1:N_procs)
         real(8) re0
         real(8) time0
         integer time2, hour, min, sec
-        real(8) Ep_procs(1:NX, 1:NY, 1:N_procs), Ep(1:NX, 1:NY, 1:NZ)
-        real(8) U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
-        real(8) U_tmp(0:NX+1, 0:NY+1, 0:NZ+1), V_tmp(0:NX+1, 0:NY+1, 0:NZ+1), W_tmp(0:NX+1, 0:NY+1, 0:NZ+1)
-        real(8) U_grad(NX, NY, NZ), V_grad(NX, NY, NZ), W_grad(NX, NY, NZ)
-        real(8) U_rms, lamda, Re_lamda, tmp, tmp_sum, D(3, 3), S(3, 3), epsilon, eta
-        real(8) mean, std
+        real(8) Ep_procs(1:NX, 1:NY, 1:N_procs)
+        real(8) U_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
+        real(8) U_grad_procs(NX, NY, N_procs), V_grad_procs(NX, NY, N_procs), W_grad_procs(NX, NY, N_procs)
+        real(8) U_rms, lambda, Re_lambda, tmp, tmp_sum, D(3, 3), S(3, 3)
+        real(8) epsilon, L_kolmogorov, T_kolmogorov, U_kolmogorov
+        real(8) trC_tmp, trC_mean, trC_std
+        real(8) U_tmp, V_tmp, W_tmp, U_tmp_sum, V_tmp_sum, W_tmp_sum
+        real(8) Ep_energy, Ep_energy_sum
         
         if (mod(step, 10) == 0 .or. mod(step, Dstep) == 0) then
-            call MPI_Gather(U_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, U(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-            call MPI_Gather(V_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, V(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-            call MPI_Gather(W_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, W(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-            if (myrank == 0) then
-                U(:, :, 0) = U(:, :, NZ)
-                U(:, :, NZ+1) = U(:, :, 1)
-                V(:, :, 0) = V(:, :, NZ)
-                V(:, :, NZ+1) = V(:, :, 1)
-                W(:, :, 0) = W(:, :, NZ)
-                W(:, :, NZ+1) = W(:, :, 1)
-
-                ! テイラー長レイノルズ数
-                U_tmp(:, :, :) = U(:, :, :) - sum(U(1:NX, 1:NY, 1:NZ))/(NX*NY*NZ)
-                V_tmp(:, :, :) = V(:, :, :) - sum(V(1:NX, 1:NY, 1:NZ))/(NX*NY*NZ)
-                W_tmp(:, :, :) = W(:, :, :) - sum(W(1:NX, 1:NY, 1:NZ))/(NX*NY*NZ)
-                U_tmp(:, :, :) = U_tmp(:, :, :) * U_C
-                V_tmp(:, :, :) = V_tmp(:, :, :) * U_C
-                W_tmp(:, :, :) = W_tmp(:, :, :) * U_C
-                do k = 1, NZ
-                    do j = 1, NY
-                        do i = 1, NX
-                            U_grad(i, j, k) = (U_tmp(i, j, k) - U_tmp(i-1, j, k))/dX
-                            V_grad(i, j, k) = (V_tmp(i, j, k) - V_tmp(i, j-1, k))/dY
-                            W_grad(i, j, k) = (W_tmp(i, j, k) - W_tmp(i, j, k-1))/dZ
-                        enddo
-                    enddo
-                enddo
-                U_rms = sqrt((sum(U_tmp(1:NX, 1:NY, 1:NZ)**2) &
-                            + sum(V_tmp(1:NX, 1:NY, 1:NZ)**2) &
-                            + sum(W_tmp(1:NX, 1:NY, 1:NZ)**2))/(3.0d0*NX*NY*NZ))
-                lamda = sqrt(sum(U_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(U_grad**2) &  ! 空間平均同士で割るので格子点数で割らなくてよい
-                        + sum(V_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(V_grad**2) &
-                        + sum(W_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(W_grad**2))
-                Re_lamda = U_rms*lamda/nu
-            endif
-
-            ! コルモゴロフ長
+            ! エネルギー散逸率とコルモゴロフ
             tmp = 0.0d0
             do k = 1, N_procs
                 do j = 1, NY
@@ -1188,7 +1019,7 @@ contains
                         D(3, 1) = (W_procs(i+1, j, k) - W_procs(i-1, j, k) + W_procs(i+1, j, k-1) - W_procs(i-1, j, k-1))/(4*dX)
                         D(3, 2) = (W_procs(i, j+1, k) - W_procs(i, j-1, k) + W_procs(i, j+1, k-1) - W_procs(i, j-1, k-1))/(4*dY)
                         D(3, 3) = (W_procs(i, j, k) - W_procs(i, j, k-1))/dZ
-                        D(:, :) = D(:, :)*U_C
+                        D(:, :) = D(:, :)*U_C/L_C
                         S(1, 1) = (D(1, 1) + D(1, 1))
                         S(1, 2) = (D(1, 2) + D(2, 1))
                         S(1, 3) = (D(1, 3) + D(3, 1))
@@ -1203,21 +1034,61 @@ contains
                 enddo
             enddo
             call MPI_Allreduce(tmp, tmp_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-            if (myrank == 0) then
-                epsilon = 0.5d0*nu*tmp_sum/(NX*NY*NZ)
-                eta = (nu**3/epsilon)**0.25d0
-                ! write(*, '(12e12.4)') Re_lamda, epsilon, eta, dX
-            endif
-        endif
+            epsilon = nu/2.0d0*tmp_sum/(NX*NY*NZ)  ! エネルギー散逸率
+            L_kolmogorov = (nu**3/epsilon)**0.25d0  ! 最小スケールの渦長さ
+            T_kolmogorov = (nu/epsilon)**0.5d0  ! 最小スケールの渦時間
+            U_kolmogorov = (nu*epsilon)**0.25d0  ! 最小スケールの渦速度
 
-        if (mod(step, 10) == 0 .or. mod(step, Dstep) == 0) then
+            ! テイラー長レイノルズ数
+            U_tmp = sum(U_procs(1:NX, 1:NY, 1:N_procs))/(NX*NY*NZ)
+            V_tmp = sum(V_procs(1:NX, 1:NY, 1:N_procs))/(NX*NY*NZ)
+            W_tmp = sum(W_procs(1:NX, 1:NY, 1:N_procs))/(NX*NY*NZ)
+            call MPI_Allreduce(U_tmp, U_tmp_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+            call MPI_Allreduce(V_tmp, V_tmp_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+            call MPI_Allreduce(W_tmp, W_tmp_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+            U_dif_procs(:, :, :) = U_procs(:, :, :) - U_tmp_sum
+            V_dif_procs(:, :, :) = V_procs(:, :, :) - V_tmp_sum
+            W_dif_procs(:, :, :) = W_procs(:, :, :) - W_tmp_sum
+            U_dif_procs(:, :, :) = U_dif_procs(:, :, :) * U_C
+            V_dif_procs(:, :, :) = V_dif_procs(:, :, :) * U_C
+            W_dif_procs(:, :, :) = W_dif_procs(:, :, :) * U_C
+            do k = 1, N_procs
+                do j = 1, NY
+                    do i = 1, NX
+                        U_grad_procs(i, j, k) = (U_dif_procs(i, j, k) - U_dif_procs(i-1, j, k))/dX_C
+                        V_grad_procs(i, j, k) = (V_dif_procs(i, j, k) - V_dif_procs(i, j-1, k))/dY_C
+                        W_grad_procs(i, j, k) = (W_dif_procs(i, j, k) - W_dif_procs(i, j, k-1))/dZ_C
+                    enddo
+                enddo
+            enddo
+            U_tmp = (sum(U_dif_procs(1:NX, 1:NY, 1:N_procs)**2) + &
+                     sum(V_dif_procs(1:NX, 1:NY, 1:N_procs)**2) + &
+                     sum(W_dif_procs(1:NX, 1:NY, 1:N_procs)**2))/(3.0d0*NX*NY*NZ)
+            call MPI_Allreduce(U_tmp, U_rms, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+            U_rms = sqrt(U_rms)  ! 速度のRMS値
+
+            U_tmp = sum(U_grad_procs**2)   ! 空間平均同士で割るので格子点数で割らなくてよい
+            V_tmp = sum(V_grad_procs**2)
+            W_tmp = sum(W_grad_procs**2)
+            call MPI_Allreduce(U_tmp, U_tmp_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+            call MPI_Allreduce(V_tmp, V_tmp_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+            call MPI_Allreduce(W_tmp, W_tmp_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+            U_tmp = sum(U_dif_procs(1:NX, 1:NY, 1:N_procs)**2)/U_tmp_sum &
+                  + sum(V_dif_procs(1:NX, 1:NY, 1:N_procs)**2)/V_tmp_sum &
+                  + sum(W_dif_procs(1:NX, 1:NY, 1:N_procs)**2)/W_tmp_sum
+            call MPI_Allreduce(U_tmp, lambda, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+            lambda = sqrt(lambda)  ! テイラー長
+
+            Re_lambda = U_rms*lambda/nu  ! テイラー長レイノルズ数
+
+            ! 運動エネルギー
             K_energy = sum(U_procs(1:NX, 1:NY, 1:N_procs)**2) + sum(V_procs(1:NX, 1:NY, 1:N_procs)**2) + sum(W_procs(1:NX, 1:NY, 1:N_procs)**2)
             K_energy = K_energy*U_C**2/2
             K_energy = K_energy/(NX*NY*NZ)
-            call MPI_Allreduce(K_energy, K_energy_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-            
             if (K_energy*0.0d0 /= 0.0d0) stop 'NaN value'  ! NaNの判定
+            call MPI_Allreduce(K_energy, K_energy_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
+            ! 弾性エネルギー
             do k = 1, N_procs
                 do j = 1, NY
                     do i = 1, NX
@@ -1225,21 +1096,35 @@ contains
                     enddo
                 enddo
             enddo
-            call MPI_Gather(Ep_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Ep(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
+            Ep_energy = sum(Ep_procs(:, :, :))/(NX*NY*NZ)
+            call MPI_Allreduce(Ep_energy, Ep_energy_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
+            ! 伸長長さ
             trC_procs(:, :, :) = C_procs(1, 1:NX, 1:NY, 1:N_procs)+C_procs(4, 1:NX, 1:NY, 1:N_procs)+C_procs(6, 1:NX, 1:NY, 1:N_procs)
-            call MPI_Gather(trC_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, trC(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
+            trC_tmp = sum(trC_procs)/(NX*NY*NZ)
+            call MPI_Allreduce(trC_tmp, trC_mean, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+            trC_tmp = sum((trC_procs - trC_mean)**2)/(NX*NY*NZ)
+            call MPI_Allreduce(trC_tmp, trC_std, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+            trC_std = sqrt(trC_std)
             
+            ! 時系列データの保存
             if (myrank == 0) then
-                mean = sum(trC) / (NX*NY*NZ)
-                std = sqrt(sum((trC-mean)**2) / (NX*NY*NZ))
                 open(30, file = trim(dir)//'all_time.d', position='append')
-                write(30, *) step*dt_C, K_energy_sum, Re_lamda, epsilon, eta, sum(Ep(:, :, :))/(NX*NY*NZ), mean, std
+                write(30, *) step*dt_C, K_energy_sum, Re_lambda, epsilon, L_kolmogorov, T_kolmogorov, U_kolmogorov, &
+                             Ep_energy_sum, trC_mean, trC_std
                 close(30)
             endif
         endif
 
         if (mod(step, Dstep) == 0) then
+            U_tmp = maxval(U_procs(1:NX, 1:NY, 1:N_procs))
+            V_tmp = maxval(V_procs(1:NX, 1:NY, 1:N_procs))
+            W_tmp = maxval(W_procs(1:NX, 1:NY, 1:N_procs))
+            call MPI_Allreduce(U_tmp, U_tmp_sum, 1, MPI_REAL8, MPI_MAX, MPI_COMM_WORLD, ierr)
+            call MPI_Allreduce(V_tmp, V_tmp_sum, 1, MPI_REAL8, MPI_MAX, MPI_COMM_WORLD, ierr)
+            call MPI_Allreduce(W_tmp, W_tmp_sum, 1, MPI_REAL8, MPI_MAX, MPI_COMM_WORLD, ierr)
+
+            ! SPD条件
             count = 0
             do k = 1, N_procs
                 do j = 1, NY
@@ -1251,9 +1136,6 @@ contains
             enddo
             call MPI_Allreduce(count, count_sum, 1, MPI_INTEGER, MPI_SUM, MPI_COMM_WORLD, ierr)
 
-            trC_procs(:, :, :) = C_procs(1, 1:NX, 1:NY, 1:N_procs)+C_procs(4, 1:NX, 1:NY, 1:N_procs)+C_procs(6, 1:NX, 1:NY, 1:N_procs)
-            call MPI_Gather(trC_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, trC(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-            
             if (myrank == 0) then
                 time0 = MPI_Wtime()
                 time2 = int((time0-time1)*(Nstep-step)/step)
@@ -1263,15 +1145,12 @@ contains
 
                 write(*, '(a, I7)', advance='no') 'step:', step
                 write(*, '(a, e12.4)', advance='no') '  | K_energy:', K_energy_sum
-                write(*, '(a, F7.3)', advance='no') &
-                '  | CFL:', max(maxval(U(:, :, :))*dt/dX, maxval(V(:, :, :))*dt/dY, maxval(W(:, :, :))*dt/dY)*6.0d0
+                write(*, '(a, F7.3)', advance='no') '  | CFL:', max(U_tmp_sum*dt/dX, V_tmp_sum*dt/dY, W_tmp_sum*dt/dZ)*6.0d0
                 ! write(*, '(a, F6.3)', advance='no') '  | index 0:', counter(0)*1.0d0/(3*NX*NY*NZ)
                 ! write(*, '(a, F6.3)', advance='no') '  1:', counter(1)*1.0d0/(3*NX*NY*NZ)
                 ! write(*, '(a, F6.3)', advance='no') '  2:', counter(2)*1.0d0/(3*NX*NY*NZ)
                 ! write(*, '(a, F6.3)', advance='no') '  3:', counter(3)*1.0d0/(3*NX*NY*NZ)
-                mean = sum(trC) / (NX*NY*NZ)
-                std = sqrt(sum((trC-mean)**2) / (NX*NY*NZ))
-                write(*, '(a, F8.3, a, F7.3)', advance='no') '  | trC:', mean, ' +-', std
+                write(*, '(a, F8.3, a, F7.3)', advance='no') '  | trC:', trC_mean, ' +-', trC_std
                 ! write(*, '(a, F8.3, a, F8.3)', advance='no') '  |', minval(trC(:, :, :)), '< trC <', maxval(trC(:, :, :))
                 ! write(*, '(a, F6.3)', advance='no') '  | SPD:', count_sum*1.0d0/(NX*NY*NZ)
                 write(*, '(a, I3, a, I2, a, I2)', advance='no') '  | time_left:', hour, ':', min, ':', sec
@@ -1306,8 +1185,8 @@ contains
         if (myrank == 0) then
             call mk_dir(trim(dir)//'Map/')
             write(str, '(I8.8)') step
+            
             open(10, file=trim(dir)//'Map/z_'//str//'.bin', form='unformatted', status='replace', access='stream')
-
             k = NZ/2  ! x-y平面
             do j = 1, NY
                 do i = 1, NX
@@ -1320,7 +1199,7 @@ contains
                     D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
                     D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
                     D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
-                    D(:, :) = D(:, :)*U_C
+                    D(:, :) = D(:, :)*U_C/L_C
 
                     E(1) = (U(i-1, j, k)+U(i, j, k))/2*U_C
                     E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
@@ -1354,7 +1233,7 @@ contains
                     D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
                     D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
                     D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
-                    D(:, :) = D(:, :)*U_C
+                    D(:, :) = D(:, :)*U_C/L_C
     
                     E(1) = (U(i-1, j, k)+U(i, j, k))/2*U_C
                     E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
@@ -1373,59 +1252,41 @@ contains
                 enddo
             enddo
             close(20)
+
+            open(30, file=trim(dir)//'Map/x_'//str//'.bin', form='unformatted', status='replace', access='stream')
+            i = NX/2  ! x-z平面
+            do k = 1, NZ
+                do j = 1, NY
+                    D(1, 1) = (U(i, j, k) - U(i-1, j, k))/dX
+                    D(1, 2) = (U(i, j+1, k) - U(i, j-1, k) + U(i-1, j+1, k) - U(i-1, j-1, k))/(4*dY)
+                    D(1, 3) = (U(i, j, k+1) - U(i, j, k-1) + U(i-1, j, k+1) - U(i-1, j, k-1))/(4*dZ)
+                    D(2, 1) = (V(i+1, j, k) - V(i-1, j, k) + V(i+1, j-1, k) - V(i-1, j-1, k))/(4*dX)
+                    D(2, 2) = (V(i, j, k) - V(i, j-1, k))/dY
+                    D(2, 3) = (V(i, j, k+1) - V(i, j, k-1) + V(i, j-1, k+1) - V(i, j-1, k-1))/(4*dZ)
+                    D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
+                    D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
+                    D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
+                    D(:, :) = D(:, :)*U_C/L_C
+    
+                    E(1) = (U(i-1, j, k)+U(i, j, k))/2*U_C
+                    E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
+                    E(3) = (W(i, j, k-1)+W(i, j, k))/2*U_C
+                    Omega(1) = (D(3, 2) - D(2, 3))
+                    Omega(2) = (D(1, 3) - D(3, 1))
+                    Omega(3) = (D(2, 1) - D(1, 2))
+                    S(1) = (D(3, 2) + D(2, 3))
+                    S(2) = (D(1, 3) + D(3, 1))
+                    S(3) = (D(2, 1) + D(1, 2))
+                    Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
+                    trC = C(1, i, j, k) + C(4, i, j, k) + C(6, i, j, k)
+                    write(30) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, E(1), E(2), E(3), sum(E**2)/2, &
+                              Omega(1), Omega(2), Omega(3), sum(Omega**2)/2, &
+                              trC, C(1, i, j, k), C(2, i, j, k), C(3, i, j, k), C(4, i, j, k), C(5, i, j, k), C(6, i, j, k)
+                enddo
+            enddo
+            close(30)
         endif
     end subroutine get_data_binary
-
-    ! subroutine input(U_procs, V_procs, W_procs, P_procs, C_procs, Ax0_procs, Ay0_procs, Az0_procs, Tx0_procs, Ty0_procs, Tz0_procs)  ! initを実行した後に書く
-    !     real(8), intent(out) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
-    !     real(8), intent(out) :: P_procs(0:NX+1, 0:NY+1, 0:N_procs+1), C_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1)
-    !     real(8), intent(out) :: Ax0_procs(1:NX, 1:NY, 1:N_procs), Ay0_procs(1:NX, 1:NY, 1:N_procs), Az0_procs(1:NX, 1:NY, 1:N_procs)
-    !     real(8), intent(out) :: Tx0_procs(1:NX, 1:NY, 1:N_procs), Ty0_procs(1:NX, 1:NY, 1:N_procs), Tz0_procs(1:NX, 1:NY, 1:N_procs)
-    !     real(8) U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
-    !     real(8) P(0:NX+1, 0:NY+1, 0:NZ+1), C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
-    !     real(8) Ax0(1:NX, 1:NY, 1:NZ), Ay0(1:NX, 1:NY, 1:NZ), Az0(1:NX, 1:NY, 1:NZ)
-    !     real(8) Tx0(1:NX, 1:NY, 1:NZ), Ty0(1:NX, 1:NY, 1:NZ), Tz0(1:NX, 1:NY, 1:NZ)
-    !     integer i, j, k
-    !     character(8) str
-    !     write(str, '(I8.8)') input_step  ! 数値を文字列に変換
-
-    !     if (myrank == 0) then
-    !         open(10, file=trim(dir)//str//'.d')
-    !         do k = 1, NZ
-    !             do j = 1, NY
-    !                 do i = 1, NX
-    !                     read(10, *) U(i, j, k), V(i, j, k), W(i, j, k), P(i, j, k), C(:, i, j, k), &
-    !                                 Ax0(i, j, k), Ay0(i, j, k), Az0(i, j, k), Tx0(i, j, k), Ty0(i, j, k), Tz0(i, j, k)
-    !                 enddo
-    !             enddo
-    !         enddo
-    !         close(10)
-    !     endif
-
-    !     call MPI_Scatter(U(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, U_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Scatter(V(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, V_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Scatter(W(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, W_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Scatter(P(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, P_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Scatter(C(1, 0, 0, 1), 6*(NX+2)*(NY+2)*N_procs, MPI_REAL8, C_procs(1, 0, 0, 1), 6*(NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Scatter(Ax0(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Ax0_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Scatter(Ay0(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Ay0_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Scatter(Az0(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Az0_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Scatter(Tx0(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Tx0_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Scatter(Ty0(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Ty0_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Scatter(Tz0(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Tz0_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-
-    !     call MPI_Boundary(U_procs)
-    !     call MPI_Boundary(V_procs)
-    !     call MPI_Boundary(W_procs)
-    !     call MPI_Boundary(P_procs)
-    !     call C_MPI_Boundary(C_procs)
-    !     call PBM(U_procs)
-    !     call PBM(V_procs)
-    !     call PBM(W_procs)
-    !     call PBM(P_procs)
-    !     call C_PBM(C_procs)
-    !     if (myrank == 0) write(*, *) 'input_file='//dir//str//'.d'
-    ! end subroutine input
 
     subroutine input_binary(U_procs, V_procs, W_procs, P_procs, C_procs, Ax0_procs, Ay0_procs, Az0_procs, Tx0_procs, Ty0_procs, Tz0_procs)
         real(8), intent(out) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
@@ -1433,10 +1294,12 @@ contains
         real(8), intent(out) :: Ax0_procs(1:NX, 1:NY, 1:N_procs), Ay0_procs(1:NX, 1:NY, 1:N_procs), Az0_procs(1:NX, 1:NY, 1:N_procs)
         real(8), intent(out) :: Tx0_procs(1:NX, 1:NY, 1:N_procs), Ty0_procs(1:NX, 1:NY, 1:N_procs), Tz0_procs(1:NX, 1:NY, 1:N_procs)
         integer i, j, k
+        real(8) K_energy, K_energy_sum
         character(8) str
         write(str, '(I8.8)') myrank
 
-        open(100, file=trim(dir)//'Restart/'//str//'.bin', form='unformatted')
+        ! open(100, file=trim(dir)//'Restart/'//str//'.bin', form='unformatted')
+        open(100, file='data/Restart/'//str//'.bin', form='unformatted')
         do k = 1, N_procs
             do j = 1, NY
                 do i = 1, NX
@@ -1458,47 +1321,15 @@ contains
         call PBM(W_procs)
         call PBM(P_procs)
         call C_PBM(C_procs)
+
+        ! 運動エネルギー確認
+        K_energy = sum(U_procs(1:NX, 1:NY, 1:N_procs)**2) + sum(V_procs(1:NX, 1:NY, 1:N_procs)**2) + sum(W_procs(1:NX, 1:NY, 1:N_procs)**2)
+        K_energy = K_energy*U_C**2/2
+        K_energy = K_energy/(NX*NY*NZ)
+        call MPI_Allreduce(K_energy, K_energy_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        if (myrank == 0) write(*, '(a, e12.4)') 'K_energy:', K_energy_sum
+
     end subroutine input_binary
-
-    ! subroutine output(U_procs, V_procs, W_procs, P_procs, C_procs, Ax_procs, Ay_procs, Az_procs, Tx_procs, Ty_procs, Tz_procs, step)
-    !     real(8), intent(in) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
-    !     real(8), intent(in) :: P_procs(0:NX+1, 0:NY+1, 0:N_procs+1), C_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1)
-    !     real(8), intent(in) :: Ax_procs(1:NX, 1:NY, 1:N_procs), Ay_procs(1:NX, 1:NY, 1:N_procs), Az_procs(1:NX, 1:NY, 1:N_procs)
-    !     real(8), intent(in) :: Tx_procs(1:NX, 1:NY, 1:N_procs), Ty_procs(1:NX, 1:NY, 1:N_procs), Tz_procs(1:NX, 1:NY, 1:N_procs)
-    !     integer, intent(in) :: step
-    !     real(8) U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
-    !     real(8) P(0:NX+1, 0:NY+1, 0:NZ+1), C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
-    !     real(8) Ax(1:NX, 1:NY, 1:NZ), Ay(1:NX, 1:NY, 1:NZ), Az(1:NX, 1:NY, 1:NZ)
-    !     real(8) Tx(1:NX, 1:NY, 1:NZ), Ty(1:NX, 1:NY, 1:NZ), Tz(1:NX, 1:NY, 1:NZ)
-    !     integer i, j, k
-    !     character(8) str
-    !     write(str, '(I8.8)') step  ! 数値を文字列に変換
-
-    !     call MPI_Gather(U_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, U(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Gather(V_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, V(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Gather(W_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, W(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Gather(P_procs(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, P(0, 0, 1), (NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Gather(C_procs(1, 0, 0, 1), 6*(NX+2)*(NY+2)*N_procs, MPI_REAL8, C(1, 0, 0, 1), 6*(NX+2)*(NY+2)*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Gather(Ax_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Ax(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Gather(Ay_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Ay(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Gather(Az_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Az(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Gather(Tx_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Tx(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Gather(Ty_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Ty(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-    !     call MPI_Gather(Tz_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Tz(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-
-    !     if (myrank == 0) then
-    !         open(10, file=trim(dir)//str//'.d')
-    !         do k = 1, NZ
-    !             do j = 1, NY
-    !                 do i = 1, NX
-    !                     write(10, *) U(i, j, k), V(i, j, k), W(i, j, k), P(i, j, k), C(:, i, j, k), &
-    !                                  Ax(i, j, k), Ay(i, j, k), Az(i, j, k), Tx(i, j, k), Ty(i, j, k), Tz(i, j, k)
-    !                 enddo
-    !             enddo
-    !         enddo
-    !         close(10)
-    !     endif
-    ! end subroutine output
 
     subroutine output_binary(U_procs, V_procs, W_procs, P_procs, C_procs, Ax_procs, Ay_procs, Az_procs, Tx_procs, Ty_procs, Tz_procs)
         real(8), intent(in) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
@@ -1547,7 +1378,7 @@ contains
                     D(3, 1) = (W_procs(i+1, j, k) - W_procs(i-1, j, k) + W_procs(i+1, j, k-1) - W_procs(i-1, j, k-1))/(4*dX)
                     D(3, 2) = (W_procs(i, j+1, k) - W_procs(i, j-1, k) + W_procs(i, j+1, k-1) - W_procs(i, j-1, k-1))/(4*dY)
                     D(3, 3) = (W_procs(i, j, k) - W_procs(i, j, k-1))/dZ
-                    D(:, :) = D(:, :)*U_C
+                    D(:, :) = D(:, :)*U_C/L_C
 
                     Omega(1) = (D(3, 2) - D(2, 3))
                     Omega(2) = (D(1, 3) - D(3, 1))
@@ -1561,7 +1392,7 @@ contains
         if (myrank == 0) then
             write(str, '(I8.8)') step
             call mk_dir(trim(dir)//'Enstrophy/')
-            open(10, file=trim(dir)//'Enstrophy/'//str//'.vtk', status='replace', form='unformatted', &
+            open(10, file=trim(dir)//'Enstrophy/Enstrophy_'//str//'.vtk', status='replace', form='unformatted', &
                     action='write', access='stream', convert='big_endian')
 
             write(buffer,'(a)') '# vtk DataFile Version 3.0'//lf
@@ -1670,7 +1501,6 @@ contains
         complex(8), allocatable :: T1_procs(:, :, :, :), T2_procs(:, :, :, :)
         integer i, j, k
         integer NY_procs
-        call fft_init
 
         NY_procs = NY / procs
         allocate(Q_hat_procs(1:NX/2+1, 1:NY, 1:N_procs), Phi_hat_procs(1:NX/2+1, 1:NY, 1:N_procs))
@@ -1729,8 +1559,6 @@ contains
             call fftc2r_2d(Phi_hat_procs(:, :, k),  Phi_procs(:, :, k))
         enddo
 
-        call fft_finalize
-
     end subroutine fft_solve
 
 
@@ -1766,9 +1594,6 @@ contains
         do k = 1, NZ
             do j = 1, NY_procs
                 do i = 1, NX/2+1
-                    ! LHS_procs(i, j, k) = 1.0d0 + dt*beta/Re/2.0d0*(2*(1-cos((i-1)*dX*2*PI))/dX**2 &
-                    !                                          + 2*(1-cos((myrank*NY_procs + j-1)*dY*2*PI))/dY**2 &
-                    !                                          + 2*(1-cos((k-1)*dZ*2*PI))/dZ**2)
                     LHS_procs(i, j, k) = 1.0d0 + dt*beta/Re/2.0d0*(2*(1-cos((i-1)*dX))/dX**2 &
                                                              + 2*(1-cos((myrank*NY_procs + j-1)*dY))/dY**2 &
                                                              + 2*(1-cos((k-1)*dZ))/dZ**2)
@@ -1935,7 +1760,6 @@ contains
         complex(8), allocatable :: T1_procs(:, :, :, :), T2_procs(:, :, :, :)
         integer i, j, k
         integer NY_procs
-        call fft_init
 
         NY_procs = NY / procs
         allocate(Q_hat_procs(1:NX/2+1, 1:NY, 1:N_procs))
@@ -1944,7 +1768,7 @@ contains
         allocate(T1_procs(1:NX/2+1, 1:NY_procs, 1:procs, 1:N_procs), T2_procs(1:NX/2+1, 1:NY_procs, 1:N_procs, 1:procs))
 
 
-        ! 右辺をx,y方向にfft
+        ! x,y方向にfft
         do k = 1, N_procs
             call fftr2c_2d(Q_procs(:, :, k), Q_hat_procs(:, :, k))
         enddo
@@ -1964,9 +1788,43 @@ contains
         Q_hat_hat_procs(:, :, :) = Q_hat_hat_procs(:, :, :)/(NX*NY*NZ)  ! 格子点数の半分
 
         deallocate(Q_hat_procs, Z_procs, T1_procs, T2_procs)  ! 214000目で発生するエラー対策
-
-        call fft_finalize
     end subroutine fft_forward
+
+
+    subroutine fft_backward(Phi_hat_hat_procs, Phi_procs)
+        complex(8), intent(inout) :: Phi_hat_hat_procs(:, :, :)  ! 入力の配列にはallocatableはいらない
+        real(8), intent(out) :: Phi_procs(1:NX, 1:NY, 1:N_procs)
+        complex(8), allocatable :: Phi_hat_procs(:, :, :)
+        complex(8), allocatable :: Z_procs(:, :, :)
+        complex(8), allocatable :: T1_procs(:, :, :, :), T2_procs(:, :, :, :)
+        integer i, j, k
+        integer NY_procs
+
+        NY_procs = NY / procs
+        allocate(Phi_hat_procs(1:NX/2+1, 1:NY, 1:N_procs))
+        ! allocate(Phi_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))  ! allocateされた配列を引数にとる場合、allocateはしない
+        allocate(Z_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
+        allocate(T1_procs(1:NX/2+1, 1:NY_procs, 1:procs, 1:N_procs), T2_procs(1:NX/2+1, 1:NY_procs, 1:N_procs, 1:procs))
+
+        ! z方向に逆fft
+        do j = 1, NY_procs
+            do i = 1, NX/2+1
+                call fftc2c_1d_backward(Phi_hat_hat_procs(i, j, :), Z_procs(i, j, :))
+            enddo
+        enddo
+
+        ! 軸変換
+        call MPI_Alltoall(Z_procs(1, 1, 1), (NX/2+1)*NY_procs*N_procs, MPI_DOUBLE_COMPLEX, &
+                          T2_procs(1, 1, 1, 1), (NX/2+1)*NY_procs*N_procs, MPI_DOUBLE_COMPLEX, MPI_COMM_WORLD, ierr)
+        T1_procs(:, :, :, :) = reshape(T2_procs, shape(T1_procs), order=[1, 2, 4, 3])
+        Phi_hat_procs(:, :, :) = reshape(T1_procs, shape(Phi_hat_procs))
+
+        ! x,y方向に逆fft
+        do k = 1, N_procs
+            call fftc2r_2d(Phi_hat_procs(:, :, k),  Phi_procs(:, :, k))
+        enddo
+
+    end subroutine fft_backward
 
 
     subroutine energy_sum(U_procs, V_procs, W_procs, Energy)
@@ -1981,6 +1839,9 @@ contains
         integer NY_procs
         NY_procs = NY / procs
 
+        ! allocate(U_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))  ! subroutineでallocateするのでここでは不要
+        ! allocate(V_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
+        ! allocate(W_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
         allocate(E_tmp_procs(1:NX/2+1, 1:NY_procs, 1:NZ), K_abs_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
 
         ! 速度場をフーリエ変換
@@ -2064,6 +1925,76 @@ contains
         Energy(:) = 0.0d0
 
     end subroutine energy_reset
+
+    subroutine scale_vtk(U_procs, V_procs, W_procs, step)  ! 渦のスケール分解
+        real(8), intent(in) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
+        integer, intent(in) :: step
+        complex(8), allocatable :: U_hat_hat_procs(:, :, :), V_hat_hat_procs(:, :, :), W_hat_hat_procs(:, :, :)
+        complex(8), allocatable :: U_hat_scale_procs(:, :, :, :), V_hat_scale_procs(:, :, :, :), W_hat_scale_procs(:, :, :, :)
+        real(8) U_tmp_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_tmp_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_tmp_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
+        real(8), allocatable :: K_abs_procs(:, :, :)
+        integer i, j, k, index
+        real(8) kx, ky, kz
+        integer NY_procs
+        NY_procs = NY / procs
+        
+        ! allocate(U_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
+        ! allocate(V_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
+        ! allocate(W_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
+        allocate(U_hat_scale_procs(3, 1:NX/2+1, 1:NY_procs, 1:NZ))
+        allocate(V_hat_scale_procs(3, 1:NX/2+1, 1:NY_procs, 1:NZ))
+        allocate(W_hat_scale_procs(3, 1:NX/2+1, 1:NY_procs, 1:NZ))
+        allocate(K_abs_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
+
+        ! 速度場をフーリエ変換
+        call fft_forward(U_procs(1:NX, 1:NY, 1:N_procs), U_hat_hat_procs)
+        call fft_forward(V_procs(1:NX, 1:NY, 1:N_procs), V_hat_hat_procs)
+        call fft_forward(W_procs(1:NX, 1:NY, 1:N_procs), W_hat_hat_procs)
+
+        ! 配列要素に対する波数
+        do k = 1, NZ
+            do j = 1, NY_procs
+                do i = 1, NX/2+1
+                    kx = sign(1.0d0, dble(NX + 3)/2.0d0 - dble(i)) * (- dble(abs(NX/2 + 1 - i)) + dble(NX)/2.0d0)  ! 増田さん参考
+                    ky = sign(1.0d0, dble(NY + 3)/2.0d0 - dble(myrank*NY_procs + j)) * (- dble(abs(NY/2 + 1 - myrank*NY_procs - j)) + dble(NY)/2.0d0)
+                    kz = sign(1.0d0, dble(NZ + 3)/2.0d0 - dble(k)) * (- dble(abs(NZ/2 + 1 - k)) + dble(NZ)/2.0d0)
+                    K_abs_procs(i, j, k) = sqrt(kx**2.0d0 + ky**2.0d0 + kz**2.0d0)
+                enddo
+            enddo
+        enddo
+
+        ! バンドパスフィルタ
+        U_hat_scale_procs(:, :, :, :) = 0.0d0
+        V_hat_scale_procs(:, :, :, :) = 0.0d0
+        W_hat_scale_procs(:, :, :, :) = 0.0d0
+        do k = 1, NZ
+            do j = 1, NY_procs
+                do i = 1, NX/2+1
+                    do index = 1, 3
+                        ! if (2**(index-1.5d0) <= K_abs_procs(i, j, k) .and. K_abs_procs(i, j, k) < 2**(index-0.5d0)) then  ! 波数1, 2, 4を中心に分割
+                        if (2**(index-1) <= K_abs_procs(i, j, k) .and. K_abs_procs(i, j, k) < 2**index) then  ! 波数を1~2, 2~4, 4~8と分割
+                            U_hat_scale_procs(index, i, j, k) = U_hat_hat_procs(i, j, k)
+                            V_hat_scale_procs(index, i, j, k) = V_hat_hat_procs(i, j, k)
+                            W_hat_scale_procs(index, i, j, k) = W_hat_hat_procs(i, j, k)
+                        endif
+                    enddo
+                enddo
+            enddo
+        enddo
+        do index = 1, 3
+            call fft_backward(U_hat_scale_procs(index, 1:NX/2+1, 1:NY_procs, 1:NZ), U_tmp_procs(1:NX, 1:NY, 1:N_procs))
+            call fft_backward(V_hat_scale_procs(index, 1:NX/2+1, 1:NY_procs, 1:NZ), V_tmp_procs(1:NX, 1:NY, 1:N_procs))
+            call fft_backward(W_hat_scale_procs(index, 1:NX/2+1, 1:NY_procs, 1:NZ), W_tmp_procs(1:NX, 1:NY, 1:N_procs))
+            call MPI_Boundary(U_tmp_procs)
+            call MPI_Boundary(V_tmp_procs)
+            call MPI_Boundary(W_tmp_procs)
+            call PBM(U_tmp_procs)
+            call PBM(V_tmp_procs)
+            call PBM(W_tmp_procs)
+            call vtk_binary(U_tmp_procs, V_tmp_procs, W_tmp_procs, step + index*10000000)
+        enddo
+
+    end subroutine scale_vtk
 end module fft
 
 
@@ -2109,6 +2040,19 @@ contains
         if (ibm_type == 21) then  ! 円柱内部4つ(直径:2*PI/6.0d0)
             NC = 4
             DC = 2*PI/6.0d0
+            NL_lap = int(DC/(2*dX))  ! 円柱内部の殻数
+            allocate(NL_shell(0:NL_lap))
+            do i = 0, NL_lap
+                NL_shell(i) = nint(PI*(DC-2*i*dX)/dX)
+            enddo
+            if (NL_shell(NL_lap) == 0) NL_shell(NL_lap) = 1  ! 中心に外力点を1つ置く
+            NL = sum(NL_shell)
+            dV = PI*(DC+dX)**2/4 / NL * dX
+            if (myrank == 0) write(*, '(a, 100I5)') 'NL_shell:  ', NL_shell(:)
+        endif
+        if (ibm_type == 22) then  ! 円柱内部1つ（直径:2*PI/3.0d0）
+            NC = 1
+            DC = 2*PI/3.0d0
             NL_lap = int(DC/(2*dX))  ! 円柱内部の殻数
             allocate(NL_shell(0:NL_lap))
             do i = 0, NL_lap
@@ -2188,14 +2132,14 @@ contains
                 Yc_procs(3, j, :) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
                 Xc_procs(4, j, :) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
                 Yc_procs(4, j, :) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
-                Uc_procs(1, j, :) = -sin(2*PI/NL*j)
-                Vc_procs(1, j, :) = cos(2*PI/NL*j)
-                Uc_procs(2, j, :) = sin(2*PI/NL*j)
-                Vc_procs(2, j, :) = -cos(2*PI/NL*j)
-                Uc_procs(3, j, :) = sin(2*PI/NL*j)
-                Vc_procs(3, j, :) = -cos(2*PI/NL*j)
-                Uc_procs(4, j, :) = -sin(2*PI/NL*j)
-                Vc_procs(4, j, :) = cos(2*PI/NL*j)
+                Uc_procs(1, j, :) = sin(2*PI/NL*j)
+                Vc_procs(1, j, :) = -cos(2*PI/NL*j)
+                Uc_procs(2, j, :) = -sin(2*PI/NL*j)
+                Vc_procs(2, j, :) = cos(2*PI/NL*j)
+                Uc_procs(3, j, :) = -sin(2*PI/NL*j)
+                Vc_procs(3, j, :) = cos(2*PI/NL*j)
+                Uc_procs(4, j, :) = sin(2*PI/NL*j)
+                Vc_procs(4, j, :) = -cos(2*PI/NL*j)
             enddo
         endif
         if (ibm_type == 21) then
@@ -2211,7 +2155,15 @@ contains
                     Yc_procs(3, index, :) = 2*PI*3/4 + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
                     Xc_procs(4, index, :) = 2*PI*3/4 + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
                     Yc_procs(4, index, :) = 2*PI*3/4 + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
-                    Uc_procs(1, index, :) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    ! Uc_procs(1, index, :) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)  ! 正しい
+                    ! Vc_procs(1, index, :) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    ! Uc_procs(2, index, :) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    ! Vc_procs(2, index, :) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    ! Uc_procs(3, index, :) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    ! Vc_procs(3, index, :) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    ! Uc_procs(4, index, :) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    ! Vc_procs(4, index, :) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                    Uc_procs(1, index, :) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)  ! 間違い
                     Vc_procs(1, index, :) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
                     Uc_procs(2, index, :) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
                     Vc_procs(2, index, :) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
@@ -2219,6 +2171,18 @@ contains
                     Vc_procs(3, index, :) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
                     Uc_procs(4, index, :) = -(DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
                     Vc_procs(4, index, :) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                enddo
+            enddo
+        endif
+        if (ibm_type == 22) then
+            index = 0
+            do i = 0, NL_lap
+                do j = 1, NL_shell(i)
+                    index = index + 1
+                    Xc_procs(1, index, :) = 2*PI/2 + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc_procs(1, index, :) = 2*PI/2 + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Uc_procs(1, index, :) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc_procs(1, index, :) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
                 enddo
             enddo
         endif
@@ -2374,10 +2338,6 @@ contains
             enddo
         enddo
 
-        ! if (myrank == 0) write(*, *) sum(Ub_procs)/(N_procs*NL*NC)
-        ! if (myrank == 0) write(*, *) sum(Vb_procs)/(N_procs*NL*NC)
-        ! if (myrank == 0) write(*, *) sum(Wb_procs)/(N_procs*NL*NC)
-
         do n = 1, N_procs
             do m = 1, NL
                 do l = 1, NC
@@ -2400,7 +2360,7 @@ contains
                             do i = int(Xc_procs(l, m, n)/dX - 0.5d0), int(Xc_procs(l, m, n)/dX - 0.5d0) + 2
                                 fxtmp_procs(i, j, k) = fxtmp_procs(i, j, k) &
                                                + Fxc_procs(l, m, n) * delta(X_procs(i, j, k)+0.5d0*dX, Y_procs(i, j, k), Z_procs(i, j, k), &
-                                                                      Xc_procs(l, m, n), Yc_procs(l, m, n), Zc_procs(l, m, n)) * dV
+                                                                      Xc_procs(l, m, n), Yc_procs(l, m, n), Zc_procs(l, m, n)) * dX**3
                             enddo
                         enddo
                     enddo
@@ -2409,7 +2369,7 @@ contains
                             do i = int(Xc_procs(l, m, n)/dX), int(Xc_procs(l, m, n)/dX) + 2
                                 fytmp_procs(i, j, k) = fytmp_procs(i, j, k) &
                                                + Fyc_procs(l, m, n) * delta(X_procs(i, j, k), Y_procs(i, j, k)+0.5d0*dY, Z_procs(i, j, k), &
-                                                                      Xc_procs(l, m, n), Yc_procs(l, m, n), Zc_procs(l, m, n)) * dV
+                                                                      Xc_procs(l, m, n), Yc_procs(l, m, n), Zc_procs(l, m, n)) * dX**3
                             enddo
                         enddo
                     enddo
@@ -2418,7 +2378,7 @@ contains
                             do i = int(Xc_procs(l, m, n)/dX), int(Xc_procs(l, m, n)/dX) + 2
                                 fztmp_procs(i, j, k) = fztmp_procs(i, j, k) &
                                                + Fzc_procs(l, m, n) * delta(X_procs(i, j, k), Y_procs(i, j, k), Z_procs(i, j, k)+0.5d0*dZ, &
-                                                                      Xc_procs(l, m, n), Yc_procs(l, m, n), Zc_procs(l, m, n)) * dV
+                                                                      Xc_procs(l, m, n), Yc_procs(l, m, n), Zc_procs(l, m, n)) * dX**3
                             enddo
                         enddo
                     enddo
@@ -2489,7 +2449,7 @@ contains
         do k = 1, N_procs
             do j = 1, NY
                 do i = 1, NX
-                    Q_procs(i, j, k) = Ua_procs(i, j, k) + dt*fxint_procs(i, j, k) - dt*Bx_procs(i, j, k)/2
+                    Q_procs(i, j, k) = Ua_procs(i, j, k) + dt*fxint_procs(i, j, k) - dt*Bx_procs(i, j, k)/2.0d0
                 enddo
             enddo
         enddo
@@ -2498,7 +2458,7 @@ contains
         do k = 1, N_procs
             do j = 1, NY
                 do i = 1, NX
-                    Q_procs(i, j, k) = Va_procs(i, j, k) + dt*fyint_procs(i, j, k) - dt*By_procs(i, j, k)/2
+                    Q_procs(i, j, k) = Va_procs(i, j, k) + dt*fyint_procs(i, j, k) - dt*By_procs(i, j, k)/2.0d0
                 enddo
             enddo
         enddo
@@ -2507,7 +2467,7 @@ contains
         do k = 1, N_procs
             do j = 1, NY
                 do i = 1, NX
-                    Q_procs(i, j, k) = Wa_procs(i, j, k) + dt*fzint_procs(i, j, k) - dt*Bz_procs(i, j, k)/2
+                    Q_procs(i, j, k) = Wa_procs(i, j, k) + dt*fzint_procs(i, j, k) - dt*Bz_procs(i, j, k)/2.0d0
                 enddo
             enddo
         enddo
@@ -2579,7 +2539,7 @@ contains
             do l = 1, NC
                 write(str, '(I8.8)') l
                 call mk_dir(trim(dir)//'Cylinder/')
-                open(10, file=trim(dir)//'Cylinder/'//'cylinder_'//str//'.vtk', status='replace', form='unformatted', &
+                open(10, file=trim(dir)//'Cylinder/'//'Cylinder_'//str//'.vtk', status='replace', form='unformatted', &
                         action='write', access='stream', convert='big_endian')
 
                 write(buffer,'(a)') '# vtk DataFile Version 3.0'//lf
@@ -2667,20 +2627,24 @@ program main
     ! call MPI_Barrier(MPI_COMM_WORLD)  ! これより前に処理差がつく作業(例えばwrite)をしないとエラーがでる。
     time1 = MPI_Wtime()   ! 計測開始
 
+    call fft_init
     call init(U_procs, V_procs, W_procs, P_procs, Phi_procs, &
               Ax_procs, Ay_procs, Az_procs, Ax0_procs, Ay0_procs, Az0_procs, &
               Bx_procs, By_procs, Bz_procs, Bx0_procs, By0_procs, Bz0_procs, &
               Tx_procs, Ty_procs, Tz_procs, Tx0_procs, Ty0_procs, Tz0_procs, &
               Up_procs, Vp_procs, Wp_procs, Fx_procs, Fy_procs, Fz_procs, C_procs, &
               Cpx_procs, Cnx_procs, Cpy_procs, Cny_procs, Cpz_procs, Cnz_procs, Cx_procs)
-    ! if (input_step > 0) call input(U_procs, V_procs, W_procs, P_procs, C_procs, Ax0_procs, Ay0_procs, Az0_procs, Tx0_procs, Ty0_procs, Tz0_procs)
     if (input_step > 0) call input_binary(U_procs, V_procs, W_procs, P_procs, C_procs, Ax0_procs, Ay0_procs, Az0_procs, Tx0_procs, Ty0_procs, Tz0_procs)
+    if (input_step > 0) call vtk_binary(U_procs, V_procs, W_procs, 0)
+    if (input_step > 0) call scale_vtk(U_procs, V_procs, W_procs, 0)
     if (method == 2 .or. method == 3) then
         call ibm_init(X_procs, Y_procs, Z_procs, Xc_procs, Yc_procs, Zc_procs, Uc_procs, Vc_procs, Wc_procs, &
                       Ua_procs, Va_procs, Wa_procs, Fxc_procs, Fyc_procs, Fzc_procs, fxint_procs, fyint_procs, fzint_procs)
         call ibm_vtk(Xc_procs, Yc_procs, Zc_procs)
         call ave_init(U_ave_procs, V_ave_procs, W_ave_procs, U_rms_procs, V_rms_procs, W_rms_procs)
     endif
+    call vtk_binary(U_procs, V_procs, W_procs, 0)
+    call scale_vtk(U_procs, V_procs, W_procs, 0)
 
     do step = 1, Nstep
         if (beta == 1.0d0) then
@@ -2735,7 +2699,7 @@ program main
 
         if (mod(step, Gstep)==0) call get_data_binary(U_procs, V_procs, W_procs, C_procs, step)
         if (mod(step, Gstep)==0) call vtk_binary(U_procs, V_procs, W_procs, step)
-        ! if (mod(step, output_step)==0) call output(U_procs, V_procs, W_procs, P_procs, C_procs, Ax_procs, Ay_procs, Az_procs, Tx_procs, Ty_procs, Tz_procs, step)
+        if (mod(step, Gstep)==0) call scale_vtk(U_procs, V_procs, W_procs, step)
         if (mod(step, output_step)==0) call output_binary(U_procs, V_procs, W_procs, P_procs, C_procs, Ax_procs, Ay_procs, Az_procs, Tx_procs, Ty_procs, Tz_procs)
 
         call energy_sum(U_procs, V_procs, W_procs, Energy)  ! エネルギーの足し算
@@ -2789,6 +2753,7 @@ program main
     time2 = MPI_Wtime()  ! 計測終了
     if (myrank == 0) write(*, *) 'time:', time2 - time1
 
+    call fft_finalize
     call MPI_Finalize(ierr)  ! 終わり
     
 end program main
