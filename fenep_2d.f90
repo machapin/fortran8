@@ -10,12 +10,13 @@ module smac
     integer, parameter :: output_step = 1000000  ! 配列を保存する間隔
     real(8), parameter :: PI = acos(-1.0d0)
     ! パラメータ
-    integer, parameter :: NX = 192, NY = NX
+    integer, parameter :: NX = 128, NY = NX
     real(8), parameter :: dX = 2*PI/NX, dY = 2*PI/NY  ! 規格化長さは2*PI
     real(8), parameter :: dt = 0.005d0
     ! 手法
     integer, parameter :: method = 2  ! 0:陽解法、1:FFT、2:IBM、3:固体壁
-    integer, parameter :: ibm_type = 21  ! 1:壁表面、2:壁の中全て、3:壁の中半分、11:円柱表面1つ(直径:2*PI/3.0d0)、12:円柱表面4つ(直径:2*PI/8.0d0)、13:円柱表面4つ(直径:2*PI/6.0d0)、21:円柱内部4つ(直径:2*PI/6.0d0)、22:円柱内部1つ（直径:2*PI/3.0d0）
+    integer, parameter :: ibm_type = 21  ! 1:壁表面、2:壁の中全て、3:壁の中半分、11:円柱表面1つ、12:円柱表面4つ、21:円柱内部1つ、22:円柱内部4つ
+    real(8), parameter :: DC = 2*PI / 4.0d0  ! 円柱の直径、円柱の中心点を確認すること！
     integer, parameter :: flow_type = 0  ! 0:外力なし(f=0)、1:クエット流れ(Uwall=1)、2:ポアズイユ流れ(fx=1)、3:テイラーグリーン外力、4:テイラーグリーン渦の減衰
     integer, parameter :: eigen_method = 0  ! 0:固有値計算、1:SPDならindex3
     ! 無次元パラメータ
@@ -31,7 +32,7 @@ module smac
     integer, parameter :: f_C = 2  ! 円柱回転速度[rps]
     real(8), parameter :: D_C = 0.03d0  ! 円柱直径[m]
     real(8), parameter :: U_C = f_C * PI * D_C  ! 代表速度
-    real(8), parameter :: L_C = D_C / (2*PI/6.0d0)  ! 代表長さ  ! 分母はDCであるべき
+    real(8), parameter :: L_C = D_C / DC  ! 代表長さ
     real(8), parameter :: nu = 1.0d-6  ! 動粘性係数
     real(8), parameter :: Re = U_C*L_C/nu
     ! その他のパラメータ
@@ -69,8 +70,8 @@ contains
         write(*, '(a, F8.3)') 'U_C =', U_C
         write(*, '(a, E12.4)') 'nu =', nu
         write(*, '(a, F10.3)') 'Re  =', Re
-        write(*, '(a, E12.4)') 'dt_C =', dt_C
         write(*, '(a, E12.4)') 'dX_C =', dX_C
+        write(*, '(a, E12.4)') 'dt_C =', dt_C
         write(*, '(a, F8.3)') 'step /[s]=', 1.0d0/dt_C
 
         ! 初期条件（Taylor-Green）
@@ -1443,7 +1444,7 @@ module ibm
     implicit none
     ! IBM用パラメータ
     integer NC, NL
-    real(8) DC, dV
+    real(8) dV
     character(64) :: dir_ibm = './ibm/'
 contains
     subroutine ibm_init(X, Y, Xc, Yc, Uc, Vc, Fxc, Fyc)
@@ -1460,42 +1461,22 @@ contains
         write(*, '(a, a)') 'dir_ibm:   ', dir_ibm
         call mk_dir(trim(dir_ibm))
 
-        if (ibm_type == 1) then  ! 壁表面
-            NC = 2
+        if (ibm_type == 1) NC = 2  ! 壁表面
+        if (ibm_type == 2) NC = NY/2+1  ! 壁の中全て
+        if (ibm_type == 3) NC = NY/4+1  ! 壁の中半分
+        if (ibm_type < 10) then
             NL = NX
             dV = dX*dX
         endif
-        if (ibm_type == 2) then  ! 壁の中全て
-            NC = NY/2+1
-            NL = NX
-            dV = dX*dX
-        endif
-        if (ibm_type == 3) then  ! 壁の中半分
-            NC = NY/4+1
-            NL = NX
-            dV = dX*dX
-        endif
-        if (ibm_type == 11) then  ! 円柱表面1つ
-            NC = 1
-            DC = 2*PI/3.0d0
+
+        if (ibm_type == 11 .or. ibm_type == 21) NC = 1  ! 円柱の数
+        if (ibm_type == 12 .or. ibm_type == 22) NC = 4
+
+        if (ibm_type == 11 .or. ibm_type == 12) then  ! 外力点が円柱表面のみの場合
             NL = nint(PI*DC/dX)
             dV = PI*DC/NL * dX
         endif
-        if (ibm_type == 12) then  ! 円柱表面4つ(直径:2*PI/8.0d0)
-            NC = 4
-            DC = 2*PI/8.0d0
-            NL = nint(PI*DC/dX)
-            dV = PI*DC/NL * dX
-        endif
-        if (ibm_type == 13) then  ! 円柱表面4つ(直径:2*PI/6.0d0)
-            NC = 4
-            DC = 2*PI/6.0d0
-            NL = nint(PI*DC/dX)
-            dV = PI*DC/NL * dX
-        endif
-        if (ibm_type == 21) then  ! 円柱内部4つ(直径:2*PI/6.0d0)
-            NC = 4
-            DC = 2*PI/6.0d0
+        if (ibm_type == 21 .or. ibm_type == 22) then  ! 外力点が円柱内部にもある場合
             NL_lap = int(DC/(2*dX))  ! 円柱内部の殻数
             allocate(NL_shell(0:NL_lap))
             do i = 0, NL_lap
@@ -1504,19 +1485,6 @@ contains
             if (NL_shell(NL_lap) == 0) NL_shell(NL_lap) = 1  ! 中心に外力点を1つ置く
             NL = sum(NL_shell)
             dV = PI*(DC+dX)**2/4 / NL
-            write(*, '(a, 100I5)') 'NL_shell:  ', NL_shell(:)
-        endif
-        if (ibm_type == 22) then  ! 円柱内部1つ（直径:2*PI/3.0d0）
-            NC = 1
-            DC = 2*PI/3.0d0
-            NL_lap = int(DC/(2*dX))  ! 円柱内部の殻数
-            allocate(NL_shell(0:NL_lap))
-            do i = 0, NL_lap
-                NL_shell(i) = nint(PI*(DC-2*i*dX)/dX)
-            enddo
-            if (NL_shell(NL_lap) == 0) NL_shell(NL_lap) = 1  ! 中心に外力点を1つ置く
-            NL = sum(NL_shell)
-            dV = PI*(DC+dX)**2/4 / NL * dX
             write(*, '(a, 100I5)') 'NL_shell:  ', NL_shell(:)
         endif
 
@@ -1597,33 +1565,11 @@ contains
         endif
         if (ibm_type == 11) then
             do j = 1, NL
-                ! Xc(1, j) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
-                ! Yc(1, j) = 2*PI/2 + DC/2 * sin(2*PI/NL*j)
                 Xc(1, j) = 2*PI/2 + DC/2 * cos(2*PI/NL*j)  ! 中心に配置
                 Yc(1, j) = 2*PI/2 + DC/2 * sin(2*PI/NL*j)
             enddo
         endif
         if (ibm_type == 12) then
-            do j = 1, NL
-                Xc(1, j) = 2*PI* 5/16 + DC/2 * cos(2*PI/NL*j)
-                Yc(1, j) = 2*PI* 5/16 + DC/2 * sin(2*PI/NL*j)
-                Xc(2, j) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
-                Yc(2, j) = 2*PI* 5/16 + DC/2 * sin(2*PI/NL*j)
-                Xc(3, j) = 2*PI* 5/16 + DC/2 * cos(2*PI/NL*j)
-                Yc(3, j) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
-                Xc(4, j) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
-                Yc(4, j) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
-                Uc(1, j) = sin(2*PI/NL*j)
-                Vc(1, j) = -cos(2*PI/NL*j)
-                Uc(2, j) = -sin(2*PI/NL*j)
-                Vc(2, j) = cos(2*PI/NL*j)
-                Uc(3, j) = -sin(2*PI/NL*j)
-                Vc(3, j) = cos(2*PI/NL*j)
-                Uc(4, j) = sin(2*PI/NL*j)
-                Vc(4, j) = -cos(2*PI/NL*j)
-            enddo
-        endif   
-        if (ibm_type == 13) then
             do j = 1, NL
                 Xc(1, j) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
                 Yc(1, j) = 2*PI/4 + DC/2 * sin(2*PI/NL*j)
@@ -1648,6 +1594,18 @@ contains
             do i = 0, NL_lap
                 do j = 1, NL_shell(i)
                     index = index + 1
+                    Xc(1, index) = 2*PI/2   + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc(1, index) = 2*PI/2   + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Uc(1, index) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(1, index) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                enddo
+            enddo
+        endif
+        if (ibm_type == 22) then
+            index = 0
+            do i = 0, NL_lap
+                do j = 1, NL_shell(i)
+                    index = index + 1
                     Xc(1, index) = 2*PI/4   + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
                     Yc(1, index) = 2*PI/4   + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
                     Xc(2, index) = 2*PI*3/4 + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
@@ -1664,18 +1622,6 @@ contains
                     Vc(3, index) =  (DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
                     Uc(4, index) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
                     Vc(4, index) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
-                enddo
-            enddo
-        endif
-        if (ibm_type == 22) then
-            index = 0
-            do i = 0, NL_lap
-                do j = 1, NL_shell(i)
-                    index = index + 1
-                    Xc(1, index) = 2*PI/2   + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
-                    Yc(1, index) = 2*PI/2   + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
-                    Uc(1, index) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
-                    Vc(1, index) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
                 enddo
             enddo
         endif

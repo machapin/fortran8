@@ -3,19 +3,20 @@ module smac
     ! gfortran fenep.f90 -I$HOME/local/include -L$HOME/local/lib -lfftw3 -llapack && ./a.out
     ! ステップ数
     integer, parameter :: Nstep = 1
-    integer, parameter :: Gstep = 100  ! データを取得する間隔
-    integer, parameter :: Estep = 1000  ! エネルギースペクトルを取得する間隔
-    integer, parameter :: Dstep = 10  ! デバッグする間隔
+    integer, parameter :: Gstep = 1  ! データを取得する間隔
+    integer, parameter :: Estep = 1  ! エネルギースペクトルを取得する間隔
+    integer, parameter :: Dstep = 1  ! デバッグする間隔
     integer, parameter :: input_step = 0  ! 0以外で初期条件をファイルから読み込む
     integer, parameter :: output_step = 100000  ! 配列を保存する間隔
     real(8), parameter :: PI = acos(-1.0d0)
     ! パラメータ
-    integer, parameter :: NX = 64, NY = NX, NZ = NX
+    integer, parameter :: NX = 32, NY = NX, NZ = NX
     real(8), parameter :: dX = 2*PI/NX, dY = 2*PI/NY, dZ = 2*PI/NZ
-    real(8), parameter :: dt = 0.005d0
+    real(8), parameter :: dt = 0.002d0
     ! 手法
     integer, parameter :: method = 2  ! 0:陽解法、1:FFT、2:IBM
-    integer, parameter :: ibm_type = 21  ! 11:円柱表面1つ、12:円柱表面4つ(直径:2*PI/8.0d0)、13:円柱表面4つ(直径:2*PI/6.0d0)、21:円柱内部4つ(直径:2*PI/6.0d0)
+    integer, parameter :: ibm_type = 22  ! 11:円柱表面1つ、12:円柱表面4つ、21:円柱内部1つ、22:円柱内部4つ
+    real(8), parameter :: DC = 2*PI / 4.0d0  ! 円柱の直径、円柱の中心点を確認すること！
     integer, parameter :: flow_type = 0  ! 0:外力なし(f=0)、3:テイラーグリーン外力、4:テイラーグリーン渦の減衰
     integer, parameter :: eigen_method = 1  ! 0:カルダノ、1:シルベスター、2:LAPACK
     ! 無次元パラメータ
@@ -28,17 +29,17 @@ module smac
     ! real(8), parameter :: U_C = 1.0d0  ! 本来は乱流テイラーグリーン渦の平均流の速さ
     ! real(8), parameter :: nu = L_C*U_C/Re
     ! 実験と同様のパラメータ
-    integer, parameter :: f_C = 2  ! 円柱回転速度[rps]
+    real(8), parameter :: f_C = 0.4d0  ! 円柱回転速度[rps]
     real(8), parameter :: D_C = 0.03d0  ! 円柱直径[m]
     real(8), parameter :: U_C = f_C * PI * D_C  ! 代表速度
-    real(8), parameter :: L_C = D_C / (2*PI/6.0d0)  ! 代表長さ
+    real(8), parameter :: L_C = D_C / DC  ! 代表長さ
     real(8), parameter :: nu = 1.0d-6  ! 動粘性係数
     real(8), parameter :: Re = U_C*L_C/nu
     ! その他のパラメータ
     real(8), parameter :: dX_C = dX*L_C, dY_C = dY*L_C, dZ_C = dZ*L_C
     real(8), parameter :: dt_C = dt*L_C/U_C
     ! グローバル変数
-    character(64) :: dir = './tmp/'
+    character(64) :: dir = './6gatu/'
     real(8) counter(0:3), newton_itr
     integer poisson_itr
     ! LAPACK用変数
@@ -72,12 +73,13 @@ contains
             write(*, '(a, F8.3, F8.3, F8.3, a8)') 'Von Neumann:', beta/Re*dt/dX**2, beta/Re*dt/dY**2, beta/Re*dt/dZ**2, '< 0.167'
         endif
         write(*, '(a, F8.3, F8.3, F8.3, a8)') 'CFL:', 1.0d0*dt/dX*6.0d0, 1.0d0*dt/dY*6.0d0, 1.0d0*dt/dZ*6.0d0,'< 1.0'
-        ! write(*, '(a5, F8.3)') 'tau =', tau
-        ! write(*, '(a5, F8.3)') 'nu  =', beta/Re*U_C*Xmax  ! beta/Re*U_C*Xmax：実際のnu、beta/Re：計算上のnu
-        ! write(*, '(a, F9.4)') 'U_C =', U_C
-        ! write(*, '(a, F9.4)') 'Re =', Re
-        ! write(*, '(a, F9.4)') 'nu_s =', nu_s
-        write(*, '(a, F12.8)') 'dt_C =', dt_C
+        write(*, '(a, F8.3)') 'L_C =', L_C
+        write(*, '(a, F8.3)') 'U_C =', U_C
+        write(*, '(a, E12.4)') 'nu =', nu
+        write(*, '(a, F10.3)') 'Re  =', Re
+        write(*, '(a, E12.4)') 'dX_C =', dX_C
+        write(*, '(a, E12.4)') 'dt_C =', dt_C
+        write(*, '(a, F8.3)') 'step /[s]=', 1.0d0/dt_C
 
         ! 初期条件（Taylor-Green）
         U(:, :, :) = 0.0d0
@@ -1744,6 +1746,7 @@ contains
         real(8) U_tmp(0:NX+1, 0:NY+1, 0:NZ+1), V_tmp(0:NX+1, 0:NY+1, 0:NZ+1), W_tmp(0:NX+1, 0:NY+1, 0:NZ+1)
         real(8) K_abs(1:NX/2+1, 1:NY, 1:NZ)
         integer i, j, k, index, count(3)
+        real(8) k_index(4)
         real(8) kx, ky, kz
 
         ! 速度場をフーリエ変換
@@ -1772,12 +1775,13 @@ contains
         U_hat_scale(:, :, :, :) = 0.0d0
         V_hat_scale(:, :, :, :) = 0.0d0
         W_hat_scale(:, :, :, :) = 0.0d0
+        k_index = [1.0d0, 2.0d0, 5.0d0, 12.0d0]  ! 波数の範囲を選択
         ! count(:) = 0
         do k = 1, NZ
             do j = 1, NY
                 do i = 1, NX/2+1
                     do index = 1, 3
-                        if (2**(index-1) <= K_abs(i, j, k) .and. K_abs(i, j, k) < 2**index) then
+                        if (k_index(index) <= K_abs(i, j, k) .and. K_abs(i, j, k) < k_index(index+1)) then
                             U_hat_scale(index, i, j, k) = U_hat(i, j, k)
                             V_hat_scale(index, i, j, k) = V_hat(i, j, k)
                             W_hat_scale(index, i, j, k) = W_hat(i, j, k)
@@ -1813,7 +1817,7 @@ module ibm
     implicit none
     ! IBM用パラメータ
     integer NC, NL
-    real(8) DC, dV
+    real(8) dV
     character(64) :: dir_ibm = './ibm/'
 contains
     subroutine ibm_init(X, Y, Z, Xc, Yc, Zc, Uc, Vc, Wc, Fxc, Fyc, Fzc)
@@ -1831,27 +1835,14 @@ contains
         write(*, '(a, a)') 'dir_ibm:   ', dir_ibm
         call mk_dir(trim(dir_ibm))
 
-        if (ibm_type == 11) then  ! 円柱表面1つ
-            NC = 1
-            DC = 2*PI/6.0d0
+        if (mod(ibm_type, 10) == 1) NC = 1  ! 円柱の数
+        if (mod(ibm_type, 10) == 2) NC = 4
+
+        if (ibm_type/10 == 1) then  ! 外力点が円柱表面のみの場合
             NL = nint(PI*DC/dX)
             dV = PI*DC/NL * dX * dX
         endif
-        if (ibm_type == 12) then  ! 円柱表面4つ(直径:2*PI/8.0d0)
-            NC = 4
-            DC = 2*PI/8.0d0
-            NL = nint(PI*DC/dX)
-            dV = PI*DC/NL * dX * dX
-        endif
-        if (ibm_type == 13) then  ! 円柱表面4つ(直径:2*PI/6.0d0)
-            NC = 4
-            DC = 2*PI/6.0d0
-            NL = nint(PI*DC/dX)
-            dV = PI*DC/NL * dX * dX
-        endif
-        if (ibm_type == 21) then  ! 円柱内部4つ(直径:2*PI/6.0d0)
-            NC = 4
-            DC = 2*PI/6.0d0
+        if (ibm_type/10 == 2) then  ! 外力点が円柱内部にもある場合
             NL_lap = int(DC/(2*dX))  ! 円柱内部の殻数
             allocate(NL_shell(0:NL_lap))
             do i = 0, NL_lap
@@ -1891,39 +1882,19 @@ contains
         Uc(:, :, :) = 0.0d0
         Vc(:, :, :) = 0.0d0
         Wc(:, :, :) = 0.0d0
-        if (ibm_type == 11) then
+        if (ibm_type == 11) then  ! 円柱表面のみ、かつ円柱1つ
             do j = 1, NL
                 Xc(1, j, :) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
                 Yc(1, j, :) = 2*PI/2 + DC/2 * sin(2*PI/NL*j)
             enddo
         endif
-        if (ibm_type == 12) then
+        if (ibm_type == 12) then  ! 円柱表面のみ、かつ円柱4つ
             do j = 1, NL
-                Xc(1, j, :) = 2*PI* 5/16 + DC/2 * cos(2*PI/NL*j)
-                Yc(1, j, :) = 2*PI* 5/16 + DC/2 * sin(2*PI/NL*j)
-                Xc(2, j, :) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
-                Yc(2, j, :) = 2*PI* 5/16 + DC/2 * sin(2*PI/NL*j)
-                Xc(3, j, :) = 2*PI* 5/16 + DC/2 * cos(2*PI/NL*j)
-                Yc(3, j, :) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
-                Xc(4, j, :) = 2*PI*11/16 + DC/2 * cos(2*PI/NL*j)
-                Yc(4, j, :) = 2*PI*11/16 + DC/2 * sin(2*PI/NL*j)
-                Uc(1, j, :) = sin(2*PI/NL*j)
-                Vc(1, j, :) = -cos(2*PI/NL*j)
-                Uc(2, j, :) = -sin(2*PI/NL*j)
-                Vc(2, j, :) = cos(2*PI/NL*j)
-                Uc(3, j, :) = -sin(2*PI/NL*j)
-                Vc(3, j, :) = cos(2*PI/NL*j)
-                Uc(4, j, :) = sin(2*PI/NL*j)
-                Vc(4, j, :) = -cos(2*PI/NL*j)
-            enddo
-        endif   
-        if (ibm_type == 13) then
-            do j = 1, NL
-                Xc(1, j, :) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
-                Yc(1, j, :) = 2*PI/4 + DC/2 * sin(2*PI/NL*j)
+                Xc(1, j, :) = 2*PI/4   + DC/2 * cos(2*PI/NL*j)
+                Yc(1, j, :) = 2*PI/4   + DC/2 * sin(2*PI/NL*j)
                 Xc(2, j, :) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
-                Yc(2, j, :) = 2*PI/4 + DC/2 * sin(2*PI/NL*j)
-                Xc(3, j, :) = 2*PI/4 + DC/2 * cos(2*PI/NL*j)
+                Yc(2, j, :) = 2*PI/4   + DC/2 * sin(2*PI/NL*j)
+                Xc(3, j, :) = 2*PI/4   + DC/2 * cos(2*PI/NL*j)
                 Yc(3, j, :) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
                 Xc(4, j, :) = 2*PI*3/4 + DC/2 * cos(2*PI/NL*j)
                 Yc(4, j, :) = 2*PI*3/4 + DC/2 * sin(2*PI/NL*j)
@@ -1937,7 +1908,19 @@ contains
                 Vc(4, j, :) = -cos(2*PI/NL*j)
             enddo
         endif
-        if (ibm_type == 21) then
+        if (ibm_type == 21) then  ! 円柱内部、かつ円柱1つ
+            index = 0
+            do i = 0, NL_lap
+                do j = 1, NL_shell(i)
+                    index = index + 1
+                    Xc(1, index, :) = 2*PI/2 + (DC-2*i*dX)/2 * cos(2*PI/NL_shell(i)*j)
+                    Yc(1, index, :) = 2*PI/2 + (DC-2*i*dX)/2 * sin(2*PI/NL_shell(i)*j)
+                    Uc(1, index, :) =  (DC-2*i*dX)/DC * sin(2*PI/NL_shell(i)*j)
+                    Vc(1, index, :) = -(DC-2*i*dX)/DC * cos(2*PI/NL_shell(i)*j)
+                enddo
+            enddo
+        endif
+        if (ibm_type == 22) then  ! 円柱内部、かつ円柱4つ
             index = 0
             do i = 0, NL_lap
                 do j = 1, NL_shell(i)
@@ -1964,9 +1947,9 @@ contains
         do k = 1, NZ
             Zc(:, :, k) = (k-0.25d0)*dZ
         enddo
-        Xc(:, :, :) = Xc(:, :, :) + 10d-10*dX  ! 速度定義点から少しずらして外力点を定義
-        Yc(:, :, :) = Yc(:, :, :) + 10d-10*dY
-        Zc(:, :, :) = Zc(:, :, :) + 10d-10*dZ
+        ! Xc(:, :, :) = Xc(:, :, :) + 10d-10*dX  ! 速度定義点から少しずらして外力点を定義
+        ! Yc(:, :, :) = Yc(:, :, :) + 10d-10*dY
+        ! Zc(:, :, :) = Zc(:, :, :) + 10d-10*dZ
 
     end subroutine ibm_init
 
@@ -2232,12 +2215,9 @@ contains
             enddo
         enddo
 
-        ! write(*, *) sum(fxtmp)/(NZ*NL*NC)
-        ! write(*, *) sum(fytmp)/(NZ*NL*NC)
-        ! write(*, *) sum(fztmp)/(NZ*NL*NC)
-        write(*, *) sum(fxtmp)/(NX*NY*NZ)
-        write(*, *) sum(fytmp)/(NX*NY*NZ)
-        write(*, *) sum(fztmp)/(NX*NY*NZ)
+        ! write(*, *) sum(fxtmp)/(NX*NY*NZ)
+        ! write(*, *) sum(fytmp)/(NX*NY*NZ)
+        ! write(*, *) sum(fztmp)/(NX*NY*NZ)
 
         ! do k = 0, NZ+1
         !     do j = 0, NY+1
