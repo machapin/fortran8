@@ -1,6 +1,6 @@
 module smac
     implicit none
-    ! gfortran fenep_2d.f90 -I$HOME/local/include -L$HOME/local/lib -lfftw3 && ./a.out
+    ! gfortran fenep_2d.f90 -I$HOME/local/include -L$HOME/local/lib -lfftw3 -O3 && ./a.out
     ! ステップ数
     integer, parameter :: Nstep = 1
     integer, parameter :: Gstep = 10  ! データを取得する間隔
@@ -15,26 +15,26 @@ module smac
     real(8), parameter :: dt = 0.005d0
     ! 手法
     integer, parameter :: method = 2  ! 0:陽解法、1:FFT、2:IBM、3:固体壁
-    integer, parameter :: ibm_type = 21  ! 1:壁表面、2:壁の中全て、3:壁の中半分、11:円柱表面1つ、12:円柱表面4つ、21:円柱内部1つ、22:円柱内部4つ
+    integer, parameter :: ibm_type = 12  ! 1:壁表面、2:壁の中全て、3:壁の中半分、11:円柱表面1つ、12:円柱表面4つ、21:円柱内部1つ、22:円柱内部4つ
     real(8), parameter :: DC = 2*PI / 4.0d0  ! 円柱の直径、円柱の中心点を確認すること！
     integer, parameter :: flow_type = 0  ! 0:外力なし(f=0)、1:クエット流れ(Uwall=1)、2:ポアズイユ流れ(fx=1)、3:テイラーグリーン外力、4:テイラーグリーン渦の減衰
     integer, parameter :: eigen_method = 0  ! 0:固有値計算、1:SPDならindex3
     ! 無次元パラメータ
-    ! real(8), parameter :: Re = 1.0d0
+    real(8), parameter :: Re = 1.0d0
     real(8), parameter :: beta = 1.0d0
     real(8), parameter :: Wi = 1.0d0
     real(8), parameter :: Lp = 55.0d0
     ! 有次元パラメータ
-    ! real(8), parameter :: L_C = 1.0d0  ! 長さが100なら100/2*PI
-    ! real(8), parameter :: U_C = 1.0d0  ! 本来は乱流テイラーグリーン渦の平均流の速さ
-    ! real(8), parameter :: nu = L_C*U_C/Re
+    real(8), parameter :: L_C = 1.0d0  ! 長さが100なら100/2*PI
+    real(8), parameter :: U_C = 1.0d0  ! 本来は乱流テイラーグリーン渦の平均流の速さ
+    real(8), parameter :: nu = L_C*U_C/Re
     ! 実験と同様のパラメータ
-    integer, parameter :: f_C = 2  ! 円柱回転速度[rps]
-    real(8), parameter :: D_C = 0.03d0  ! 円柱直径[m]
-    real(8), parameter :: U_C = f_C * PI * D_C  ! 代表速度
-    real(8), parameter :: L_C = D_C / DC  ! 代表長さ
-    real(8), parameter :: nu = 1.0d-6  ! 動粘性係数
-    real(8), parameter :: Re = U_C*L_C/nu
+    ! integer, parameter :: f_C = 2  ! 円柱回転速度[rps]
+    ! real(8), parameter :: D_C = 0.03d0  ! 円柱直径[m]
+    ! real(8), parameter :: U_C = f_C * PI * D_C  ! 代表速度
+    ! real(8), parameter :: L_C = D_C / DC  ! 代表長さ
+    ! real(8), parameter :: nu = 1.0d-6  ! 動粘性係数
+    ! real(8), parameter :: Re = U_C*L_C/nu
     ! その他のパラメータ
     real(8), parameter :: dX_C = dX*L_C, dY_C = dY*L_C
     real(8), parameter :: dt_C = dt*L_C/U_C

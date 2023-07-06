@@ -1,45 +1,45 @@
 module smac
     implicit none
-    ! gfortran fenep.f90 -I$HOME/local/include -L$HOME/local/lib -lfftw3 -llapack && ./a.out
-    ! ステップ数
-    integer, parameter :: Nstep = 1
-    integer, parameter :: Gstep = 1  ! データを取得する間隔
-    integer, parameter :: Estep = 1  ! エネルギースペクトルを取得する間隔
-    integer, parameter :: Dstep = 1  ! デバッグする間隔
-    integer, parameter :: input_step = 0  ! 0以外で初期条件をファイルから読み込む
-    integer, parameter :: output_step = 100000  ! 配列を保存する間隔
+    ! gfortran fenep.f90 -I$HOME/local/include -L$HOME/local/lib -lfftw3 -llapack -O3 && ./a.out
     real(8), parameter :: PI = acos(-1.0d0)
+    ! ステップ数
+    integer, parameter :: Nstep = 20000
+    integer, parameter :: Tstep = 100000000  ! 時系列データを取得する間隔
+    integer, parameter :: Lstep = 100  ! ログを表示する間隔
+    integer, parameter :: Gstep = 100000000  ! Mapや渦度を保存する間隔（これとは別に20stepおきに格子点中心の伸長長さを保存している）
+    integer, parameter :: Ostep = 100000000  ! 配列を保存する間隔
     ! パラメータ
     integer, parameter :: NX = 32, NY = NX, NZ = NX
     real(8), parameter :: dX = 2*PI/NX, dY = 2*PI/NY, dZ = 2*PI/NZ
-    real(8), parameter :: dt = 0.002d0
+    real(8), parameter :: dt = 0.001d0
     ! 手法
-    integer, parameter :: method = 2  ! 0:陽解法、1:FFT、2:IBM
+    integer, parameter :: input_type = 0  ! 0:初期条件なし、1:初期条件ありで1周、2:初期値ありで2周
+    integer, parameter :: method = 1  ! 0:陽解法、1:FFT、2:IBM
     integer, parameter :: ibm_type = 22  ! 11:円柱表面1つ、12:円柱表面4つ、21:円柱内部1つ、22:円柱内部4つ
     real(8), parameter :: DC = 2*PI / 4.0d0  ! 円柱の直径、円柱の中心点を確認すること！
-    integer, parameter :: flow_type = 0  ! 0:外力なし(f=0)、3:テイラーグリーン外力、4:テイラーグリーン渦の減衰
-    integer, parameter :: eigen_method = 1  ! 0:カルダノ、1:シルベスター、2:LAPACK
+    integer, parameter :: flow_type = 3  ! 0:外力なし(f=0)、3:テイラーグリーン外力、4:テイラーグリーン渦の減衰
+    integer, parameter :: eigen_method = 3  ! 0:カルダノ、1:シルベスター、2:LAPACK、3:ビエト
     ! 無次元パラメータ
-    ! real(8), parameter :: Re = 1.0d0
+    real(8), parameter :: Re = 2.0d0
     real(8), parameter :: beta = 1.0d0
-    real(8), parameter :: Wi = 1.0d0
-    real(8), parameter :: Lp = 55.0d0
+    real(8), parameter :: Wi = 2.0d0
+    real(8), parameter :: Lp = 100.0d0
     ! 有次元パラメータ
-    ! real(8), parameter :: L_C = 1.0d0  ! 長さが100なら100/2*PI
-    ! real(8), parameter :: U_C = 1.0d0  ! 本来は乱流テイラーグリーン渦の平均流の速さ
-    ! real(8), parameter :: nu = L_C*U_C/Re
+    real(8), parameter :: L_C = 1.0d0  ! 長さが100なら100/2*PI
+    real(8), parameter :: U_C = 1.0d0  ! 本来は乱流テイラーグリーン渦の平均流の速さ
+    real(8), parameter :: nu = L_C*U_C/Re
     ! 実験と同様のパラメータ
-    real(8), parameter :: f_C = 0.4d0  ! 円柱回転速度[rps]
-    real(8), parameter :: D_C = 0.03d0  ! 円柱直径[m]
-    real(8), parameter :: U_C = f_C * PI * D_C  ! 代表速度
-    real(8), parameter :: L_C = D_C / DC  ! 代表長さ
-    real(8), parameter :: nu = 1.0d-6  ! 動粘性係数
-    real(8), parameter :: Re = U_C*L_C/nu
+    ! real(8), parameter :: f_C = 0.4d0  ! 円柱回転速度[rps]
+    ! real(8), parameter :: D_C = 0.03d0  ! 円柱直径[m]
+    ! real(8), parameter :: U_C = f_C * PI * D_C  ! 代表速度
+    ! real(8), parameter :: L_C = D_C / DC  ! 代表長さ
+    ! real(8), parameter :: nu = 1.0d-6  ! 動粘性係数
+    ! real(8), parameter :: Re = U_C*L_C/nu
     ! その他のパラメータ
     real(8), parameter :: dX_C = dX*L_C, dY_C = dY*L_C, dZ_C = dZ*L_C
     real(8), parameter :: dt_C = dt*L_C/U_C
     ! グローバル変数
-    character(64) :: dir = './6gatu/'
+    character(64) :: dir = './koide4/'
     real(8) counter(0:3), newton_itr
     integer poisson_itr
     ! LAPACK用変数
@@ -58,28 +58,28 @@ contains
         character(2) str
         write(str, '(I2.2)') ibm_type
 
-        if (method == 1) dir = trim(dir)//'fft'
-        if (method == 2) dir = trim(dir)//'ibm'//str
-        if (flow_type == 1) dir = trim(dir)//'_couette'
-        if (flow_type == 2) dir = trim(dir)//'_poiseuille'
-        if (flow_type == 3) dir = trim(dir)//'_taylor'
-        if (flow_type == 4) dir = trim(dir)//'_taylor_decay'
-        if (beta == 1.0d0) dir = trim(dir)//'_newton'
-        dir = trim(dir)//'/'
+        ! if (method == 1) dir = trim(dir)//'fft'
+        ! if (method == 2) dir = trim(dir)//'ibm'//str
+        ! if (flow_type == 1) dir = trim(dir)//'_couette'
+        ! if (flow_type == 2) dir = trim(dir)//'_poiseuille'
+        ! if (flow_type == 3) dir = trim(dir)//'_taylor'
+        ! if (flow_type == 4) dir = trim(dir)//'_taylor_decay'
+        ! if (beta == 1.0d0) dir = trim(dir)//'_newton'
+        ! dir = trim(dir)//'/'
         write(*, '(a, a)') 'dir:  ', dir
         call mk_dir(dir)
 
-        if (method == 0) then
-            write(*, '(a, F8.3, F8.3, F8.3, a8)') 'Von Neumann:', beta/Re*dt/dX**2, beta/Re*dt/dY**2, beta/Re*dt/dZ**2, '< 0.167'
-        endif
-        write(*, '(a, F8.3, F8.3, F8.3, a8)') 'CFL:', 1.0d0*dt/dX*6.0d0, 1.0d0*dt/dY*6.0d0, 1.0d0*dt/dZ*6.0d0,'< 1.0'
-        write(*, '(a, F8.3)') 'L_C =', L_C
-        write(*, '(a, F8.3)') 'U_C =', U_C
-        write(*, '(a, E12.4)') 'nu =', nu
-        write(*, '(a, F10.3)') 'Re  =', Re
-        write(*, '(a, E12.4)') 'dX_C =', dX_C
-        write(*, '(a, E12.4)') 'dt_C =', dt_C
-        write(*, '(a, F8.3)') 'step /[s]=', 1.0d0/dt_C
+        ! if (method == 0) then
+        !     write(*, '(a, F8.3, F8.3, F8.3, a8)') 'Von Neumann:', beta/Re*dt/dX**2, beta/Re*dt/dY**2, beta/Re*dt/dZ**2, '< 0.167'
+        ! endif
+        ! write(*, '(a, F8.3, F8.3, F8.3, a8)') 'CFL:', 1.0d0*dt/dX*6.0d0, 1.0d0*dt/dY*6.0d0, 1.0d0*dt/dZ*6.0d0,'< 1.0'
+        ! write(*, '(a, F8.3)') 'L_C =', L_C
+        ! write(*, '(a, F8.3)') 'U_C =', U_C
+        ! write(*, '(a, E12.4)') 'nu =', nu
+        ! write(*, '(a, F10.3)') 'Re  =', Re
+        ! write(*, '(a, E12.4)') 'dX_C =', dX_C
+        ! write(*, '(a, E12.4)') 'dt_C =', dt_C
+        ! write(*, '(a, F8.3)') 'step /[s]=', 1.0d0/dt_C
 
         ! 初期条件（Taylor-Green）
         U(:, :, :) = 0.0d0
@@ -96,12 +96,19 @@ contains
         Fx(:, :, :) = 0.0d0
         Fy(:, :, :) = 0.0d0
         Fz(:, :, :) = 0.0d0
+        call random_number(C)
+        C(:, :, :, :) = 0.001d0 * (C(:, :, :, :)-0.5d0)
+        C(1, :, :, :) = C(1, :, :, :) + 1.0d0
+        C(4, :, :, :) = C(4, :, :, :) + 1.0d0
+        C(6, :, :, :) = C(6, :, :, :) + 1.0d0
         if (flow_type == 3) then
             do k = 1, NZ
                 do j = 1, NY
                     do i = 1, NX
                         Fx(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)  ! 増田さん, 安房井さん
                         Fy(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
+                        U(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)/(2.0d0 * nu)
+                        V(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)/(2.0d0 * nu)
                         ! Fx(i, j, k) = -sin(i*dX) * cos((k-0.5d0)*dZ)  ! x-z 増田さん, 安房井さん
                         ! Fz(i, j, k) = cos((i-0.5d0)*dX) * sin(k*dZ)
                         ! Fx(i, j, k) = -sin(2.0d0*(j-0.5d0)*dY)  ! 小井手さん
@@ -111,23 +118,23 @@ contains
                     enddo
                 enddo
             enddo
+            ! デバッグモード
+            W(:, :, :) = 0.0d0
+            C(:, :, :, :) = 0.0d0
+            C(1, :, :, :) = 1.0d0
+            C(4, :, :, :) = 1.0d0
+            C(6, :, :, :) = 1.0d0
         endif
         if (flow_type == 4) then
             do k = 1, NZ
                 do j = 1, NY
                     do i = 1, NX
-                        U(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)  ! テイラー渦
-                        V(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
+                        U(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)/(2.0d0 * nu)  ! テイラー渦
+                        V(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)/(2.0d0 * nu)
                     enddo
                 enddo
             enddo
         endif
-        call random_number(C)
-        C(:, :, :, :) = 0.001d0 * (C(:, :, :, :)-0.5d0)
-        ! C(:, :, :, :) = 0.0d0
-        C(1, :, :, :) = C(1, :, :, :) + 1.0d0
-        C(4, :, :, :) = C(4, :, :, :) + 1.0d0
-        C(6, :, :, :) = C(6, :, :, :) + 1.0d0
 
         call PBM(U)
         call PBM(V)
@@ -163,9 +170,7 @@ contains
         real(8), intent(in) :: C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
         real(8), intent(out) :: Cpx(6, 0:NX, NY, NZ), Cnx(6, 0:NX, NY, NZ)
         integer i, j, k, l, index
-        real(8) Cptemp(6, 3), Cntemp(6, 3), Eigen(3, 6), mintemp
-        real(8) temp
-        temp = 0.0d0
+        real(8) Cptemp(6, 3), Cntemp(6, 3), Eigen(6), minlist(4), input(3, 3), output(3)
         counter(:) = 0.0d0
 
         do k = 1, NZ
@@ -178,40 +183,59 @@ contains
                     Cptemp(:, 3) = C(:, i-1, j, k)/4 + C(:, i, j, k) - C(:, i+1, j, k)/4
                     Cntemp(:, 3) = -C(:, i-1, j, k)/4 + C(:, i, j, k) + C(:, i+1, j, k)/4
 
-                    Eigen(:, :) = 0.0d0
                     do l = 1, 3
-                        if (eigen_method == 0) call Cardano(Cptemp(:, l), Eigen(l, 1), Eigen(l, 2), Eigen(l, 3))  ! CardanoでCpnの95%ぐらい時間かかってる。
-                        if (eigen_method == 0) call Cardano(Cntemp(:, l), Eigen(l, 4), Eigen(l, 5), Eigen(l, 6))
-                        if (eigen_method == 1) call Sylvester(Cptemp(:, l), Eigen(l, 1))
-                        if (eigen_method == 1) call Sylvester(Cntemp(:, l), Eigen(l, 4))
-                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cptemp(:, l), 3, Eigen(l, 1:3), work, lwork, info)
-                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cntemp(:, l), 3, Eigen(l, 4:6), work, lwork, info)
-                    enddo
-
-                    index = 0
-                    mintemp = 0.0d0
-                    do l = 1, 3  ! 全ての固有値が正、最小固有値が最大
-                        if (minval(Eigen(l, :)) >= mintemp) then
-                            index = l
-                            mintemp = minval(Eigen(l, :))
+                        if (eigen_method == 0) then
+                            call Cardano(Cptemp(:, l), Eigen(1), Eigen(2), Eigen(3))  ! CardanoでCpnの95%ぐらい時間かかってる。
+                            call Cardano(Cntemp(:, l), Eigen(4), Eigen(5), Eigen(6))
+                            minlist(l) = minval(Eigen(:))
+                        endif
+                        if (eigen_method == 1) then
+                            call Sylvester(Cptemp(:, l), Eigen(1))
+                            call Sylvester(Cntemp(:, l), Eigen(2))
+                            minlist(l) = minval(Eigen(1:2))
+                        endif
+                        if (eigen_method == 2) then
+                            input(1:3, 1) = Cptemp(1:3, l)
+                            input(1, 1:3) = Cptemp(1:3, l)
+                            input(2:3, 2) = Cptemp(4:5, l)
+                            input(2, 2:3) = Cptemp(4:5, l)
+                            input(3, 3) = Cptemp(6, l)
+                            call dsyev('N', 'U', 3, input, 3, output, work, lwork, info)
+                            Eigen(1:3) = output(:)
+                            input(1:3, 1) = Cntemp(1:3, l)
+                            input(1, 1:3) = Cntemp(1:3, l)
+                            input(2:3, 2) = Cntemp(4:5, l)
+                            input(2, 2:3) = Cntemp(4:5, l)
+                            input(3, 3) = Cntemp(6, l)
+                            call dsyev('N', 'U', 3, input, 3, output, work, lwork, info)
+                            Eigen(4:6) = output(:)
+                            minlist(l) = minval(Eigen(:))
+                        endif
+                        if (eigen_method == 3) then
+                            call Vieta(Cptemp(:, l), Eigen(1))
+                            call Vieta(Cntemp(:, l), Eigen(2))
+                            minlist(l) = minval(Eigen(1:2))
                         endif
                     enddo
+                    minlist(4) = 0.0d0
+                    index = maxloc(minlist, 1)
 
-                    if (index > 0) then
-                        Cpx(:, i-1, j, k) = Cptemp(:, index)
-                        Cnx(:, i, j, k) = Cntemp(:, index)
-                    else
+                    if (index == 4) then
                         Cpx(:, i-1, j, k) = C(:, i, j, k)
                         Cnx(:, i, j, k) = C(:, i, j, k)
+                    else
+                        if (eigen_method == 1) index = 3
+                        Cpx(:, i-1, j, k) = Cptemp(:, index)
+                        Cnx(:, i, j, k) = Cntemp(:, index)
                     endif
                     counter(index) = counter(index) + 1
-
-                    ! index=3とどれだけずれているか確認
-                    temp = temp + sum(Cptemp(:, index) - Cptemp(:, 3))/sum(Cptemp(:, 3))
                 enddo
             enddo
         enddo
-        ! write(*, '(E12.4)') temp/(NX*NY*NZ)
+        ! デバッグ用
+        ! call Cardano(Cptemp(:, l), Eigen(l, 1), Eigen(l, 2), Eigen(l, 3))
+        ! call Vieta(Cptemp(:, l), Eigen(l, 4))
+        ! write(*, *) Eigen(l, 1), Eigen(l, 2), Eigen(l, 3), Eigen(l, 4)
 
         Cpx(:, NX, :, :) = Cpx(:, 0, :, :)
         Cnx(:, 0, :, :) = Cnx(:, NX, :, :)
@@ -221,7 +245,7 @@ contains
         real(8), intent(in) :: C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
         real(8), intent(out) :: Cpy(6, NX, 0:NY, NZ), Cny(6, NX, 0:NY, NZ)
         integer i, j, k, l, index
-        real(8) Cptemp(6, 3), Cntemp(6, 3), Eigen(3, 6), mintemp
+        real(8) Cptemp(6, 3), Cntemp(6, 3), Eigen(6), minlist(4), input(3, 3), output(3)
 
         do k = 1, NZ
             do j = 1, NY
@@ -233,31 +257,50 @@ contains
                     Cptemp(:, 3) = C(:, i, j-1, k)/4 + C(:, i, j, k) - C(:, i, j+1, k)/4
                     Cntemp(:, 3) = -C(:, i, j-1, k)/4 + C(:, i, j, k) + C(:, i, j+1, k)/4
 
-                    Eigen(:, :) = 0.0d0
                     do l = 1, 3
-                        if (eigen_method == 0) call Cardano(Cptemp(:, l), Eigen(l, 1), Eigen(l, 2), Eigen(l, 3))  ! CardanoでCpnの95%ぐらい時間かかってる。
-                        if (eigen_method == 0) call Cardano(Cntemp(:, l), Eigen(l, 4), Eigen(l, 5), Eigen(l, 6))
-                        if (eigen_method == 1) call Sylvester(Cptemp(:, l), Eigen(l, 1))
-                        if (eigen_method == 1) call Sylvester(Cntemp(:, l), Eigen(l, 4))
-                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cptemp(:, l), 3, Eigen(l, 1:3), work, lwork, info)
-                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cntemp(:, l), 3, Eigen(l, 4:6), work, lwork, info)
-                    enddo
-
-                    index = 0
-                    mintemp = 0.0d0
-                    do l = 1, 3  ! 全ての固有値が正、最小固有値が最大
-                        if (minval(Eigen(l, :)) >= mintemp) then
-                            index = l
-                            mintemp = minval(Eigen(l, :))
+                        if (eigen_method == 0) then
+                            call Cardano(Cptemp(:, l), Eigen(1), Eigen(2), Eigen(3))  ! CardanoでCpnの95%ぐらい時間かかってる。
+                            call Cardano(Cntemp(:, l), Eigen(4), Eigen(5), Eigen(6))
+                            minlist(l) = minval(Eigen(:))
+                        endif
+                        if (eigen_method == 1) then
+                            call Sylvester(Cptemp(:, l), Eigen(1))
+                            call Sylvester(Cntemp(:, l), Eigen(2))
+                            minlist(l) = minval(Eigen(1:2))
+                        endif
+                        if (eigen_method == 2) then
+                            input(1:3, 1) = Cptemp(1:3, l)
+                            input(1, 1:3) = Cptemp(1:3, l)
+                            input(2:3, 2) = Cptemp(4:5, l)
+                            input(2, 2:3) = Cptemp(4:5, l)
+                            input(3, 3) = Cptemp(6, l)
+                            call dsyev('N', 'U', 3, input, 3, output, work, lwork, info)
+                            Eigen(1:3) = output(:)
+                            input(1:3, 1) = Cntemp(1:3, l)
+                            input(1, 1:3) = Cntemp(1:3, l)
+                            input(2:3, 2) = Cntemp(4:5, l)
+                            input(2, 2:3) = Cntemp(4:5, l)
+                            input(3, 3) = Cntemp(6, l)
+                            call dsyev('N', 'U', 3, input, 3, output, work, lwork, info)
+                            Eigen(4:6) = output(:)
+                            minlist(l) = minval(Eigen(:))
+                        endif
+                        if (eigen_method == 3) then
+                            call Vieta(Cptemp(:, l), Eigen(1))
+                            call Vieta(Cntemp(:, l), Eigen(2))
+                            minlist(l) = minval(Eigen(1:2))
                         endif
                     enddo
+                    minlist(4) = 0.0d0
+                    index = maxloc(minlist, 1)
 
-                    if (index > 0) then
-                        Cpy(:, i, j-1, k) = Cptemp(:, index)
-                        Cny(:, i, j, k) = Cntemp(:, index)
-                    else
+                    if (index == 4) then
                         Cpy(:, i, j-1, k) = C(:, i, j, k)
                         Cny(:, i, j, k) = C(:, i, j, k)
+                    else
+                        if (eigen_method == 1) index = 3
+                        Cpy(:, i, j-1, k) = Cptemp(:, index)
+                        Cny(:, i, j, k) = Cntemp(:, index)
                     endif
                     counter(index) = counter(index) + 1
                 enddo
@@ -272,7 +315,7 @@ contains
         real(8), intent(in) :: C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
         real(8), intent(out) :: Cpz(6, NX, NY, 0:NZ), Cnz(6, NX, NY, 0:NZ)
         integer i, j, k, l, index
-        real(8) Cptemp(6, 3), Cntemp(6, 3), Eigen(3, 6), mintemp
+        real(8) Cptemp(6, 3), Cntemp(6, 3), Eigen(6), minlist(4), input(3, 3), output(3)
 
         do k = 1, NZ
             do j = 1, NY
@@ -284,31 +327,50 @@ contains
                     Cptemp(:, 3) = C(:, i, j, k-1)/4 + C(:, i, j, k) - C(:, i, j, k+1)/4
                     Cntemp(:, 3) = -C(:, i, j, k-1)/4 + C(:, i, j, k) + C(:, i, j, k+1)/4
 
-                    Eigen(:, :) = 0.0d0
                     do l = 1, 3
-                        if (eigen_method == 0) call Cardano(Cptemp(:, l), Eigen(l, 1), Eigen(l, 2), Eigen(l, 3))  ! CardanoでCpnの95%ぐらい時間かかってる。
-                        if (eigen_method == 0) call Cardano(Cntemp(:, l), Eigen(l, 4), Eigen(l, 5), Eigen(l, 6))
-                        if (eigen_method == 1) call Sylvester(Cptemp(:, l), Eigen(l, 1))
-                        if (eigen_method == 1) call Sylvester(Cntemp(:, l), Eigen(l, 4))
-                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cptemp(:, l), 3, Eigen(l, 1:3), work, lwork, info)
-                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cntemp(:, l), 3, Eigen(l, 4:6), work, lwork, info)
-                    enddo
-
-                    index = 0
-                    mintemp = 0.0d0
-                    do l = 1, 3  ! 全ての固有値が正、最小固有値が最大
-                        if (minval(Eigen(l, :)) >= mintemp) then
-                            index = l
-                            mintemp = minval(Eigen(l, :))
+                        if (eigen_method == 0) then
+                            call Cardano(Cptemp(:, l), Eigen(1), Eigen(2), Eigen(3))  ! CardanoでCpnの95%ぐらい時間かかってる。
+                            call Cardano(Cntemp(:, l), Eigen(4), Eigen(5), Eigen(6))
+                            minlist(l) = minval(Eigen(:))
+                        endif
+                        if (eigen_method == 1) then
+                            call Sylvester(Cptemp(:, l), Eigen(1))
+                            call Sylvester(Cntemp(:, l), Eigen(2))
+                            minlist(l) = minval(Eigen(1:2))
+                        endif
+                        if (eigen_method == 2) then
+                            input(1:3, 1) = Cptemp(1:3, l)
+                            input(1, 1:3) = Cptemp(1:3, l)
+                            input(2:3, 2) = Cptemp(4:5, l)
+                            input(2, 2:3) = Cptemp(4:5, l)
+                            input(3, 3) = Cptemp(6, l)
+                            call dsyev('N', 'U', 3, input, 3, output, work, lwork, info)
+                            Eigen(1:3) = output(:)
+                            input(1:3, 1) = Cntemp(1:3, l)
+                            input(1, 1:3) = Cntemp(1:3, l)
+                            input(2:3, 2) = Cntemp(4:5, l)
+                            input(2, 2:3) = Cntemp(4:5, l)
+                            input(3, 3) = Cntemp(6, l)
+                            call dsyev('N', 'U', 3, input, 3, output, work, lwork, info)
+                            Eigen(4:6) = output(:)
+                            minlist(l) = minval(Eigen(:))
+                        endif
+                        if (eigen_method == 3) then
+                            call Vieta(Cptemp(:, l), Eigen(1))
+                            call Vieta(Cntemp(:, l), Eigen(2))
+                            minlist(l) = minval(Eigen(1:2))
                         endif
                     enddo
+                    minlist(4) = 0.0d0
+                    index = maxloc(minlist, 1)
 
-                    if (index > 0) then
-                        Cpz(:, i, j, k-1) = Cptemp(:, index)
-                        Cnz(:, i, j, k) = Cntemp(:, index)
-                    else
+                    if (index == 4) then
                         Cpz(:, i, j, k-1) = C(:, i, j, k)
                         Cnz(:, i, j, k) = C(:, i, j, k)
+                    else
+                        if (eigen_method == 1) index = 3
+                        Cpz(:, i, j, k-1) = Cptemp(:, index)
+                        Cnz(:, i, j, k) = Cntemp(:, index)
                     endif
                     counter(index) = counter(index) + 1
                 enddo
@@ -329,12 +391,12 @@ contains
         a1 = a(1)*a(4) + a(4)*a(6) + a(6)*a(1) - a(5)*a(5) - a(3)*a(3) - a(2)*a(2)
         a0 = -(a(1)*a(4)*a(6) + a(2)*a(5)*a(3) + a(2)*a(5)*a(3) - a(1)*a(5)*a(5) - a(2)*a(2)*a(6) - a(3)*a(4)*a(3))
 
-        p = a1 - a2**2/3
-        q = a0 - a1*a2/3 + 2*a2**3/27
-        t = (q/2)**2 + (p/3)**3  ! 三次方程式の判別式
+        p = a1 - a2**2/3.0d0
+        q = a0 - a1*a2/3.0d0 + 2.0d0*a2**3/27.0d0
+        t = (q/2.0d0)**2 + (p/3.0d0)**3  ! 三次方程式の判別式
         ! write(*, *) t
 
-        if (t > 0.0d0) then  ! 対称行列の固有値は全て実数で、tは必ず負になるので、このifを満たすものはない。
+        if (t >= 0.0d0) then  ! 対称行列の固有値は全て実数で、tは必ず負になるので、このifを満たすものはない。
             ! u3 = -q/2 + cmplx(sqrt(t), 0.0d0, kind=8)
             ! v3 = -q/2 - cmplx(sqrt(t), 0.0d0, kind=8)
             ! stop 'complex eigenvalues'
@@ -342,23 +404,44 @@ contains
             re1 = -1.0d0
             re2 = -1.0d0
         else
-            u3 = -q/2 + cmplx(0.0d0, sqrt(-t), kind=8) ! t=0のときは解に虚数を含むが、倍精度の足し引きをするので、0はありえない。
-            v3 = -q/2 - cmplx(0.0d0, sqrt(-t), kind=8)
+            u3 = -q/2.0d0 + cmplx(0.0d0, sqrt(-t), kind=8) ! t=0のときは解に虚数を含むが、倍精度の足し引きをするので、0はありえない。
+            v3 = -q/2.0d0 - cmplx(0.0d0, sqrt(-t), kind=8)
         endif
 
         w0 = cmplx(1.0d0, 0.0d0, kind=8)
-        w1 = cmplx(-0.5d0, sqrt(3.0d0)/2, kind=8)
-        w2 = cmplx(-0.5d0, -sqrt(3.0d0)/2, kind=8)
+        w1 = cmplx(-0.5d0, sqrt(3.0d0)/2.0d0, kind=8)
+        w2 = cmplx(-0.5d0, -sqrt(3.0d0)/2.0d0, kind=8)
 
-        e0 = w0*u3**(1.0d0/3.0d0) + w0*v3**(1.0d0/3.0d0) - a2/3
-        e1 = w1*u3**(1.0d0/3.0d0) + w2*v3**(1.0d0/3.0d0) - a2/3
-        e2 = w2*u3**(1.0d0/3.0d0) + w1*v3**(1.0d0/3.0d0) - a2/3
+        e0 = w0*u3**(1.0d0/3.0d0) + w0*v3**(1.0d0/3.0d0) - a2/3.0d0
+        e1 = w1*u3**(1.0d0/3.0d0) + w2*v3**(1.0d0/3.0d0) - a2/3.0d0
+        e2 = w2*u3**(1.0d0/3.0d0) + w1*v3**(1.0d0/3.0d0) - a2/3.0d0
         ! write(*, *) e0, e1, e2
 
         re0 = real(e0)
         re1 = real(e1)
         re2 = real(e2)
     end subroutine Cardano
+
+    subroutine Vieta(a, x)
+        real(8), intent(in) :: a(6)
+        real(8), intent(out) :: x
+        real(8) a0, a1, a2, p, q, t
+
+        a2 = -(a(1) + a(4) + a(6))
+        a1 = a(1)*a(4) + a(4)*a(6) + a(6)*a(1) - a(5)*a(5) - a(3)*a(3) - a(2)*a(2)
+        a0 = -(a(1)*a(4)*a(6) + a(2)*a(5)*a(3) + a(2)*a(5)*a(3) - a(1)*a(5)*a(5) - a(2)*a(2)*a(6) - a(3)*a(4)*a(3))
+
+        p = a1 - a2**2/3.0d0
+        q = a0 - a1*a2/3.0d0 + 2.0d0*a2**3/27.0d0
+        t = (q/2.0d0)**2 + (p/3.0d0)**3  ! 三次方程式の判別式
+
+        if (t >= 0.0d0) then
+            x = -100.0d0  ! 選ばれないようにする
+        else
+            x = 2.0d0*sqrt(-p/3.0d0)*cos(acos(3.0d0*q/(2.0d0*p)*sqrt(-3.0d0/p))/3.0d0 + 2.0d0*PI/3.0d0) - a2/3.0d0
+        endif
+
+    end subroutine Vieta
 
     subroutine Sylvester(a, b)
         real(8), intent(in) :: a(6)
@@ -441,8 +524,8 @@ contains
         real(8) A0(3, 3), b(6)
         real(8) x(6), x1(6), x2(6), l(6), l1(6), l2(6), Jac(6, 6), r(6)
         real(8), parameter :: dc = 1.0d-5  ! 3, 4, 5あたりがいい。
-        integer, parameter :: itrmax = 100
-        real(8), parameter :: eps = 1.0d-5
+        integer, parameter :: itrmax = 10000
+        real(8), parameter :: eps = 1.0d-6
         newton_itr = 0
 
         do k = 1, NZ
@@ -485,13 +568,9 @@ contains
                         enddo
 
                         call Lyapunov_func(A0, b, x, l)  ! f(xi)を計算
-                        ! write(*, '(6e12.4)') l(:)
                         
                         call gauss(Jac, l, r)  ! ガウスの消去法
                         x(:) = x(:) - r(:)
-                        ! write(*, '(6e12.4)') sum(r**2)
-                        ! write(*, *) itr, sum(r**2), sum(x**2), sqrt(sum(r**2)/sum(x**2))
-                        ! write(*, *) ''
 
                         if (sqrt(sum(r**2)/sum(x**2)) < eps) exit
                     enddo
@@ -900,11 +979,12 @@ contains
     end subroutine taylor_debug
 
 
-    subroutine get_data(U, V, W, step)
+    subroutine get_data(U, V, W, C, step)
         real(8), intent(in) :: U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
+        real(8), intent(in) :: C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
         integer, intent(in) :: step
         integer i, j, k, l
-        real(8) D(3, 3), Omega(3), S(3), Qti
+        real(8) D(3, 3), Omega(3), S(3), Qti, trC, E(3)
         character(8) str
         write(str, '(I8.8)') step  ! 数値を文字列に変換
 
@@ -924,18 +1004,17 @@ contains
                     D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
                     D(:, :) = D(:, :)*U_C/L_C
 
+                    E(1) = (U(i-1, j, k)+U(i, j, k))/2*U_C
+                    E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
+                    E(3) = (W(i, j, k-1)+W(i, j, k))/2*U_C
                     Omega(1) = (D(3, 2) - D(2, 3))
                     Omega(2) = (D(1, 3) - D(3, 1))
                     Omega(3) = (D(2, 1) - D(1, 2))
-                    S(1) = (D(3, 2) + D(2, 3))
-                    S(2) = (D(1, 3) + D(3, 1))
-                    S(3) = (D(2, 1) + D(1, 2))
                     Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
-                    write(10, '(11e12.4)') (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, &
-                                        (U(i-1, j, k)+U(i, j, k))/2*U_C, &
-                                        (V(i, j-1, k)+V(i, j, k))/2*U_C, &
-                                        (W(i, j, k-1)+W(i, j, k))/2*U_C, &
-                                        Omega(3), sum(Omega**2)/2, S(3), sum(S**2)/2, Qti
+                    trC = C(1, i, j, k) + C(4, i, j, k) + C(6, i, j, k)
+                    write(10, '(18e12.4)') (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, E(1), E(2), E(3), Qti, &
+                              Omega(1), Omega(2), Omega(3), sum(Omega**2)/2, &
+                              trC, C(1, i, j, k), C(2, i, j, k), C(3, i, j, k), C(4, i, j, k), C(5, i, j, k), C(6, i, j, k)
                 enddo
             enddo
         enddo
@@ -947,7 +1026,7 @@ contains
         real(8), intent(in) :: C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
         integer, intent(in) :: step
         integer i, j, k
-        real(8) D(3, 3), omega, sendan, Qti, trC
+        real(8) D(3, 3), Omega(3), S(3), Qti, trC, E(3)
         character(8) str
         write(str, '(I8.8)') step  ! 数値を文字列に変換
         open(10, file=trim(dir)//'z_'//str//'.d')
@@ -966,17 +1045,18 @@ contains
                 D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
                 D(:, :) = D(:, :)*U_C/L_C
 
-                omega = (D(2, 1) - D(1, 2))
-                sendan = (D(2, 1) + D(1, 2))
+                E(1) = (U(i-1, j, k)+U(i, j, k))/2*U_C
+                E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
+                E(3) = (W(i, j, k-1)+W(i, j, k))/2*U_C
+                Omega(1) = (D(3, 2) - D(2, 3))
+                Omega(2) = (D(1, 3) - D(3, 1))
+                Omega(3) = (D(2, 1) - D(1, 2))
                 Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
                 trC = C(1, i, j, k) + C(4, i, j, k) + C(6, i, j, k)
 
-                write(10, '(18e12.4)') (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, &
-                                       (U(i-1, j, k)+U(i, j, k))/2*U_C, &
-                                       (V(i, j-1, k)+V(i, j, k))/2*U_C, &
-                                       (W(i, j, k-1)+W(i, j, k))/2*U_C, &
-                                       omega, D(1, 1), sendan, D(2, 2), Qti, trC, &
-                                       C(1, i, j, k), C(2, i, j, k), C(3, i, j, k), C(4, i, j, k), C(5, i, j, k), C(6, i, j, k)
+                write(10, '(18e12.4)') (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, E(1), E(2), E(3), Qti, &
+                    Omega(1), Omega(2), Omega(3), sum(Omega**2)/2, &
+                    trC, C(1, i, j, k), C(2, i, j, k), C(3, i, j, k), C(4, i, j, k), C(5, i, j, k), C(6, i, j, k)
             enddo
         enddo
         close(10)
@@ -987,7 +1067,7 @@ contains
         real(8), intent(in) :: C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
         integer, intent(in) :: step
         integer i, j, k, l
-        real(8) D(3, 3), Omega(3), S(3), Qti, trC
+        real(8) D(3, 3), Omega(3), S(3), Qti, trC, E(3)
         character(8) str
         write(str, '(I8.8)') step  ! 数値を文字列に変換
         open(10, file=trim(dir)//'y_'//str//'.d')
@@ -1006,154 +1086,24 @@ contains
                 D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
                 D(:, :) = D(:, :)*U_C/L_C
 
+
+                E(1) = (U(i-1, j, k)+U(i, j, k))/2*U_C
+                E(2) = (V(i, j-1, k)+V(i, j, k))/2*U_C
+                E(3) = (W(i, j, k-1)+W(i, j, k))/2*U_C
                 Omega(1) = (D(3, 2) - D(2, 3))
                 Omega(2) = (D(1, 3) - D(3, 1))
                 Omega(3) = (D(2, 1) - D(1, 2))
-
+                Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
                 trC = C(1, i, j, k) + C(4, i, j, k) + C(6, i, j, k)
 
-                write(10, '(18e12.4)') (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, &
-                                        (U(i-1, j, k)+U(i, j, k))/2*U_C, &
-                                        (V(i, j-1, k)+V(i, j, k))/2*U_C, &
-                                        (W(i, j, k-1)+W(i, j, k))/2*U_C, &
-                                        Omega(2), 0.0d0, 0.0d0, 0.0d0, 0.0d0, trC, &
-                                        C(1, i, j, k), C(2, i, j, k), C(3, i, j, k), C(4, i, j, k), C(5, i, j, k), C(6, i, j, k)
+                write(10, '(18e12.4)') (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, E(1), E(2), E(3), Qti, &
+                    Omega(1), Omega(2), Omega(3), sum(Omega**2)/2, &
+                    trC, C(1, i, j, k), C(2, i, j, k), C(3, i, j, k), C(4, i, j, k), C(5, i, j, k), C(6, i, j, k)
             enddo
         enddo
         close(10)
         l = 1  ! 使ってません対策
     end subroutine get_data_xz
-
-    subroutine logging(U, V, W, C, step, t_start)
-        real(8), intent(in) :: U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
-        real(8), intent(in) :: C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
-        integer, intent(in) :: step
-        real(8), intent(in) :: t_start
-        integer i, j, k, count
-        real(8) trC(NX, NY, NZ), re0, re1, re2
-        real(8) t_temp
-        real(8) K_energy
-        integer(8) t_pre, hour, min, sec
-        real(8) U_tmp(0:NX+1, 0:NY+1, 0:NZ+1), V_tmp(0:NX+1, 0:NY+1, 0:NZ+1), W_tmp(0:NX+1, 0:NY+1, 0:NZ+1)
-        real(8) U_grad(NX, NY, NZ), V_grad(NX, NY, NZ), W_grad(NX, NY, NZ)
-        real(8) U_rms, lambda, Re_lambda, tmp, D(3, 3), S(3, 3), epsilon, eta
-        real(8) mean, std
-
-        if (mod(step, Dstep) == 0) then
-            ! テイラー長レイノルズ数
-            U_tmp(:, :, :) = U(:, :, :) - sum(U(1:NX, 1:NY, 1:NZ))/(NX*NY*NZ)
-            V_tmp(:, :, :) = V(:, :, :) - sum(V(1:NX, 1:NY, 1:NZ))/(NX*NY*NZ)
-            W_tmp(:, :, :) = W(:, :, :) - sum(W(1:NX, 1:NY, 1:NZ))/(NX*NY*NZ)
-            U_tmp(:, :, :) = U_tmp(:, :, :) * U_C
-            V_tmp(:, :, :) = V_tmp(:, :, :) * U_C
-            W_tmp(:, :, :) = W_tmp(:, :, :) * U_C
-            do k = 1, NZ
-                do j = 1, NY
-                    do i = 1, NX
-                        U_grad(i, j, k) = (U_tmp(i, j, k) - U_tmp(i-1, j, k))/dX_C
-                        V_grad(i, j, k) = (V_tmp(i, j, k) - V_tmp(i, j-1, k))/dY_C
-                        W_grad(i, j, k) = (W_tmp(i, j, k) - W_tmp(i, j, k-1))/dZ_C
-                    enddo
-                enddo
-            enddo
-            U_rms = sqrt((sum(U_tmp(1:NX, 1:NY, 1:NZ)**2) &
-                        + sum(V_tmp(1:NX, 1:NY, 1:NZ)**2) &
-                        + sum(W_tmp(1:NX, 1:NY, 1:NZ)**2))/(3.0d0*NX*NY*NZ))
-            lambda = sqrt(sum(U_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(U_grad**2) &  ! 空間平均同士で割るので格子点数で割らなくてよい
-                        + sum(V_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(V_grad**2) &
-                        + sum(W_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(W_grad**2))
-            Re_lambda = U_rms*lambda/nu
-
-            ! コルモゴロフ長
-            tmp = 0.0d0
-            do k = 1, NZ
-                do j = 1, NY
-                    do i = 1, NX
-                        D(1, 1) = (U(i, j, k) - U(i-1, j, k))/dX
-                        D(1, 2) = (U(i, j+1, k) - U(i, j-1, k) + U(i-1, j+1, k) - U(i-1, j-1, k))/(4*dY)
-                        D(1, 3) = (U(i, j, k+1) - U(i, j, k-1) + U(i-1, j, k+1) - U(i-1, j, k-1))/(4*dZ)
-                        D(2, 1) = (V(i+1, j, k) - V(i-1, j, k) + V(i+1, j-1, k) - V(i-1, j-1, k))/(4*dX)
-                        D(2, 2) = (V(i, j, k) - V(i, j-1, k))/dY
-                        D(2, 3) = (V(i, j, k+1) - V(i, j, k-1) + V(i, j-1, k+1) - V(i, j-1, k-1))/(4*dZ)
-                        D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
-                        D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
-                        D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
-                        D(:, :) = D(:, :)*U_C/L_C
-                        S(1, 1) = (D(1, 1) + D(1, 1))
-                        S(1, 2) = (D(1, 2) + D(2, 1))
-                        S(1, 3) = (D(1, 3) + D(3, 1))
-                        S(2, 1) = (D(2, 1) + D(1, 2))
-                        S(2, 2) = (D(2, 2) + D(2, 2))
-                        S(2, 3) = (D(2, 3) + D(3, 2))
-                        S(3, 1) = (D(3, 1) + D(1, 3))
-                        S(3, 2) = (D(3, 2) + D(2, 3))
-                        S(3, 3) = (D(3, 3) + D(3, 3))
-                        tmp = tmp + sum(S**2)
-                    enddo
-                enddo
-            enddo
-            epsilon = 0.5d0*nu*tmp/(NX*NY*NZ)
-            eta = (nu**3/epsilon)**0.25d0
-            ! write(*, '(12e12.4)') Re_lambda, epsilon, eta, dX
-        endif
-
-        if (mod(step, Dstep) == 0) then
-            write(*, '(a, I6)', advance='no') 'step:', step
-
-            ! 運動エネルギーとエネルギーカスケードの総和
-            K_energy = sum(U(1:NX, 1:NY, 1:NZ)**2) + sum(V(1:NX, 1:NY, 1:NZ)**2) + sum(W(1:NX, 1:NY, 1:NZ)**2)
-            K_energy = K_energy*U_C**2/2
-            K_energy = K_energy/(NX*NY*NZ)
-            write(*, '(a, e12.4)', advance='no') '  | K_energy:', K_energy
-
-            ! CFL条件（ただし規格化し、1以下で満たすようにしている）
-            write(*, '(a, F7.3)', advance='no') &
-            '  | CFL:', max(maxval(U(:, :, :))*dt/dX, maxval(V(:, :, :))*dt/dY, maxval(W(:, :, :))*dt/dZ)*6.0d0
-
-            ! write(*, '(a, F6.3)', advance='no') '  | index 0:', counter(0)*1.0d0/sum(counter)
-            ! write(*, '(a, F6.3)', advance='no') '  1:', counter(1)*1.0d0/sum(counter)
-            ! write(*, '(a, F6.3)', advance='no') '  2:', counter(2)*1.0d0/sum(counter)
-            ! write(*, '(a, F6.3)', advance='no') '  3:', counter(3)*1.0d0/sum(counter)
-            ! write(*, '(a, F6.2)', advance='no') '  | newton_itr:', newton_itr*1.0d0/(NX*NY*NZ)
-            ! write(*, '(a, I5)', advance='no') '  | poisson_itr:', poisson_itr
-
-            trC(:, :, :) = C(1, 1:NX, 1:NY, 1:NZ)+C(4, 1:NX, 1:NY, 1:NZ)+C(6, 1:NX, 1:NY, 1:NZ)
-            mean = sum(trC) / (NX*NY*NZ)
-            std = sqrt(sum((trC-mean)**2) / (NX*NY*NZ))
-            write(*, '(a, F8.3, a, F7.3)', advance='no') '  | trC:', mean, ' +-', std
-            ! write(*, '(a, F7.3, a, F8.3)', advance='no') '  |', minval(trC(:, :, :)), '< trC <', maxval(trC(:, :, :))
-            ! write(*, '(a, F7.3, a, F7.3)', advance='no') '  |', minval(C(1, :, :, :)), '< Cxx <', maxval(C(1, :, :, :))
-            ! write(*, '(a, F7.3, a, F7.3)', advance='no') '  |', minval(C(4, :, :, :)), '< Cyy <', maxval(C(4, :, :, :))
-            ! write(*, '(a, F7.3, a, F7.3)', advance='no') '  |', minval(C(6, :, :, :)), '< Czz <', maxval(C(6, :, :, :))
-            ! write(*, *) ''
-
-            count = 0
-            do k = 1, NZ
-                do j = 1, NY
-                    do i = 1, NX
-                        ! call Cardano(C(:, i, j, k), re0, re1, re2)
-                        ! if (re0 < 0.0d0 .or. re1 < 0.0d0 .or. re2 < 0.0d0) count = count + 1
-                        call Sylvester(C(:, i, j, k), re0)
-                        if (re0 > 0.0d0) count = count + 1
-                    enddo
-                enddo
-            enddo
-            ! write(*, '(a, F7.3)', advance='no') '  | SPD:', count*1.0d0/(NX*NY*NZ)
-
-            ! write(*, '(a, e12.4)', advance='no') '  | Re_lambda:', Re_lambda
-            ! write(*, '(a, e12.4)', advance='no') '  | epsilon:', epsilon
-            ! write(*, '(a, e12.4)', advance='no') '  | eta:', eta
-
-            call cpu_time(t_temp)
-            t_pre = int((t_temp-t_start)*(Nstep-step)/step)
-            hour = t_pre / 3600
-            min = mod(t_pre, 3600) / 60
-            sec = mod(t_pre, 60)
-            write(*, '(a, I3, a, I2, a, I2)', advance='no') '  | time_left:', hour, ':', min, ':', sec
-
-            write(*, *) ''
-        endif
-    end subroutine logging
 
     subroutine get_data_binary(U, V, W, C, step)
         real(8), intent(in) :: U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
@@ -1239,10 +1189,8 @@ contains
         real(8), intent(out) :: Ax0(1:NX, 1:NY, 1:NZ), Ay0(1:NX, 1:NY, 1:NZ), Az0(1:NX, 1:NY, 1:NZ)
         real(8), intent(out) :: Tx0(1:NX, 1:NY, 1:NZ), Ty0(1:NX, 1:NY, 1:NZ), Tz0(1:NX, 1:NY, 1:NZ)
         integer i, j, k
-        character(8) str
         real(8) K_energy
-        write(str, '(I8.8)') input_step  ! 数値を文字列に変換
-        open(10, file=trim(dir)//str//'.d')
+        open(10, file=trim(dir)//'Restart.d')
         do k = 1, NZ
             do j = 1, NY
                 do i = 1, NX
@@ -1260,20 +1208,17 @@ contains
         K_energy = sum(U(1:NX, 1:NY, 1:NZ)**2) + sum(V(1:NX, 1:NY, 1:NZ)**2) + sum(W(1:NX, 1:NY, 1:NZ)**2)
         K_energy = K_energy*U_C**2/2
         K_energy = K_energy/(NX*NY*NZ)
-        write(*, '(a, a, e12.4)') 'input_file='//dir//str//'.d', '  | K_energy:', K_energy
+        write(*, '(a, e12.4)') '  | K_energy:', K_energy
 
     end subroutine input
 
-    subroutine output(U, V, W, P, C, Ax, Ay, Az, Tx, Ty, Tz, step)
+    subroutine output(U, V, W, P, C, Ax, Ay, Az, Tx, Ty, Tz)
         real(8), intent(in) :: U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
         real(8), intent(in) :: P(0:NX+1, 0:NY+1, 0:NZ+1), C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
         real(8), intent(in) :: Ax(1:NX, 1:NY, 1:NZ), Ay(1:NX, 1:NY, 1:NZ), Az(1:NX, 1:NY, 1:NZ)
         real(8), intent(in) :: Tx(1:NX, 1:NY, 1:NZ), Ty(1:NX, 1:NY, 1:NZ), Tz(1:NX, 1:NY, 1:NZ)
-        integer, intent(in) :: step
         integer i, j, k
-        character(8) str
-        write(str, '(I8.8)') step
-        open(10, file=trim(dir)//str//'.d')
+        open(10, file=trim(dir)//'Restart.d')
 
         do k = 1, NZ
             do j = 1, NY
@@ -1284,6 +1229,7 @@ contains
             enddo
         enddo
         close(10)
+        write(*, *) 'output done'
     end subroutine output
 
     subroutine vtk_binary(U, V, W, step)
@@ -1496,7 +1442,7 @@ contains
         integer i, j, k
         real(8) Q(1:NX, 1:NY, 1:NZ), LHS(1:NX, 1:NY, 1:NZ)
 
-        if (step==1 .and. input_step==0) then  ! 1ステップ目のみ例外処理
+        if (step==1 .and. input_type==0) then  ! 1ステップ目のみ例外処理
             Ax0(:, :, :) = Ax(:, :, :)
             Ay0(:, :, :) = Ay(:, :, :)
             Az0(:, :, :) = Az(:, :, :)
@@ -2036,7 +1982,7 @@ contains
         integer, intent(in) :: step
         integer i, j, k
         
-        if (step==1 .and. input_step==0) then  ! 1ステップ目のみ例外処理
+        if (step==1 .and. input_type==0) then  ! 1ステップ目のみ例外処理
             Ax0(:, :, :) = Ax(:, :, :)
             Ay0(:, :, :) = Ay(:, :, :)
             Az0(:, :, :) = Az(:, :, :)
@@ -2311,11 +2257,169 @@ contains
     end subroutine ibm_predict
 end module ibm
 
+module data
+    use smac
+    use fft
+    use ibm
+    implicit none
+contains
+    subroutine log_progress(U, V, W, C, step, t_start)
+        real(8), intent(in) :: U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
+        real(8), intent(in) :: C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
+        integer, intent(in) :: step
+        real(8), intent(in) :: t_start
+        integer i, j, k, count
+        real(8) trC(NX, NY, NZ), re0, re1, re2
+        real(8) t_temp
+        real(8) K_energy
+        integer(8) t_pre, hour, min, sec
+        real(8) U_reg(NX, NY, NZ), V_reg(NX, NY, NZ), W_reg(NX, NY, NZ)
+        real(8) mean, std
+        ! 運動エネルギー
+        do k = 1, NZ  ! レギュラー格子に直して計算
+            do j = 1, NY
+                do i = 1, NX
+                    U_reg(i, j, k) = (U(i, j, k) + U(i-1, j, k))*U_C/2.0d0
+                    V_reg(i, j, k) = (V(i, j, k) + V(i, j-1, k))*U_C/2.0d0
+                    W_reg(i, j, k) = (W(i, j, k) + W(i, j, k-1))*U_C/2.0d0
+                enddo
+            enddo
+        enddo
+
+        write(*, '(a, I6)', advance='no') 'step:', step
+
+        ! 運動エネルギーの総和
+        K_energy = (sum(U_reg**2) + sum(V_reg**2) + sum(W_reg**2))/2.0d0
+        K_energy = K_energy/(NX*NY*NZ)
+        write(*, '(a, e12.4)', advance='no') '  | K_energy:', K_energy
+
+        ! CFL条件（ただし規格化し、1以下で満たすようにしている）
+        write(*, '(a, F7.3)', advance='no') &
+        '  | CFL:', max(maxval(U(:, :, :))*dt/dX, maxval(V(:, :, :))*dt/dY, maxval(W(:, :, :))*dt/dZ)*6.0d0
+
+        ! write(*, '(a, F6.3)', advance='no') '  | index 0:', counter(0)*1.0d0/sum(counter)
+        ! write(*, '(a, F6.3)', advance='no') '  1:', counter(1)*1.0d0/sum(counter)
+        ! write(*, '(a, F6.3)', advance='no') '  2:', counter(2)*1.0d0/sum(counter)
+        ! write(*, '(a, F6.3)', advance='no') '  3:', counter(3)*1.0d0/sum(counter)
+        ! write(*, '(a, F6.2)', advance='no') '  | newton_itr:', newton_itr*1.0d0/(NX*NY*NZ)
+        ! write(*, '(a, I5)', advance='no') '  | poisson_itr:', poisson_itr
+
+        trC(:, :, :) = C(1, 1:NX, 1:NY, 1:NZ)+C(4, 1:NX, 1:NY, 1:NZ)+C(6, 1:NX, 1:NY, 1:NZ)
+        mean = sum(trC) / (NX*NY*NZ)
+        std = sqrt(sum((trC-mean)**2) / (NX*NY*NZ))
+        ! write(*, '(a, F8.3, a, F7.3)', advance='no') '  | trC:', mean, ' +-', std
+        write(*, '(a, F7.3, a, F8.3)', advance='no') '  |', minval(trC(:, :, :)), '< trC <', maxval(trC(:, :, :))
+        ! write(*, '(a, F7.3, a, F7.3)', advance='no') '  |', minval(C(1, :, :, :)), '< Cxx <', maxval(C(1, :, :, :))
+        ! write(*, '(a, F7.3, a, F7.3)', advance='no') '  |', minval(C(4, :, :, :)), '< Cyy <', maxval(C(4, :, :, :))
+        ! write(*, '(a, F7.3, a, F7.3)', advance='no') '  |', minval(C(6, :, :, :)), '< Czz <', maxval(C(6, :, :, :))
+        ! write(*, *) ''
+
+        ! count = 0
+        ! do k = 1, NZ
+        !     do j = 1, NY
+        !         do i = 1, NX
+        !             ! call Cardano(C(:, i, j, k), re0, re1, re2)
+        !             ! if (re0 < 0.0d0 .or. re1 < 0.0d0 .or. re2 < 0.0d0) count = count + 1
+        !             call Sylvester(C(:, i, j, k), re0)
+        !             if (re0 > 0.0d0) count = count + 1
+        !         enddo
+        !     enddo
+        ! enddo
+        ! write(*, '(a, F7.3)', advance='no') '  | SPD:', count*1.0d0/(NX*NY*NZ)
+
+        ! write(*, '(a, e12.4)', advance='no') '  | Re_lambda:', Re_lambda
+        ! write(*, '(a, e12.4)', advance='no') '  | epsilon:', epsilon
+        ! write(*, '(a, e12.4)', advance='no') '  | eta:', eta
+
+        call cpu_time(t_temp)
+        t_pre = int((t_temp-t_start)*(Nstep-step)/step)
+        hour = t_pre / 3600
+        min = mod(t_pre, 3600) / 60
+        sec = mod(t_pre, 60)
+        write(*, '(a, I3, a, I2, a, I2)', advance='no') '  | time_left:', hour, ':', min, ':', sec
+
+        write(*, *) ''
+    end subroutine log_progress
+
+    subroutine all_time(U, V, W, C, step)
+        real(8), intent(in) :: U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
+        real(8), intent(in) :: C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
+        integer, intent(in) :: step
+        integer i, j, k, count
+        real(8) trC(NX, NY, NZ), re0, re1, re2
+        real(8) t_temp
+        real(8) K_energy
+        integer(8) t_pre, hour, min, sec
+        real(8) U_tmp(0:NX+1, 0:NY+1, 0:NZ+1), V_tmp(0:NX+1, 0:NY+1, 0:NZ+1), W_tmp(0:NX+1, 0:NY+1, 0:NZ+1)
+        real(8) U_grad(NX, NY, NZ), V_grad(NX, NY, NZ), W_grad(NX, NY, NZ)
+        real(8) U_rms, lambda, Re_lambda, tmp, D(3, 3), S(3, 3), epsilon, eta
+        real(8) mean, std
+
+        ! テイラー長レイノルズ数
+        U_tmp(:, :, :) = U(:, :, :) - sum(U(1:NX, 1:NY, 1:NZ))/(NX*NY*NZ)
+        V_tmp(:, :, :) = V(:, :, :) - sum(V(1:NX, 1:NY, 1:NZ))/(NX*NY*NZ)
+        W_tmp(:, :, :) = W(:, :, :) - sum(W(1:NX, 1:NY, 1:NZ))/(NX*NY*NZ)
+        U_tmp(:, :, :) = U_tmp(:, :, :) * U_C
+        V_tmp(:, :, :) = V_tmp(:, :, :) * U_C
+        W_tmp(:, :, :) = W_tmp(:, :, :) * U_C
+        do k = 1, NZ
+            do j = 1, NY
+                do i = 1, NX
+                    U_grad(i, j, k) = (U_tmp(i, j, k) - U_tmp(i-1, j, k))/dX_C
+                    V_grad(i, j, k) = (V_tmp(i, j, k) - V_tmp(i, j-1, k))/dY_C
+                    W_grad(i, j, k) = (W_tmp(i, j, k) - W_tmp(i, j, k-1))/dZ_C
+                enddo
+            enddo
+        enddo
+        U_rms = sqrt((sum(U_tmp(1:NX, 1:NY, 1:NZ)**2) &
+                    + sum(V_tmp(1:NX, 1:NY, 1:NZ)**2) &
+                    + sum(W_tmp(1:NX, 1:NY, 1:NZ)**2))/(3.0d0*NX*NY*NZ))
+        lambda = sqrt(sum(U_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(U_grad**2) &  ! 空間平均同士で割るので格子点数で割らなくてよい
+                    + sum(V_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(V_grad**2) &
+                    + sum(W_tmp(1:NX, 1:NY, 1:NZ)**2)/sum(W_grad**2))
+        Re_lambda = U_rms*lambda/nu
+
+        ! コルモゴロフ長
+        tmp = 0.0d0
+        do k = 1, NZ
+            do j = 1, NY
+                do i = 1, NX
+                    D(1, 1) = (U(i, j, k) - U(i-1, j, k))/dX
+                    D(1, 2) = (U(i, j+1, k) - U(i, j-1, k) + U(i-1, j+1, k) - U(i-1, j-1, k))/(4*dY)
+                    D(1, 3) = (U(i, j, k+1) - U(i, j, k-1) + U(i-1, j, k+1) - U(i-1, j, k-1))/(4*dZ)
+                    D(2, 1) = (V(i+1, j, k) - V(i-1, j, k) + V(i+1, j-1, k) - V(i-1, j-1, k))/(4*dX)
+                    D(2, 2) = (V(i, j, k) - V(i, j-1, k))/dY
+                    D(2, 3) = (V(i, j, k+1) - V(i, j, k-1) + V(i, j-1, k+1) - V(i, j-1, k-1))/(4*dZ)
+                    D(3, 1) = (W(i+1, j, k) - W(i-1, j, k) + W(i+1, j, k-1) - W(i-1, j, k-1))/(4*dX)
+                    D(3, 2) = (W(i, j+1, k) - W(i, j-1, k) + W(i, j+1, k-1) - W(i, j-1, k-1))/(4*dY)
+                    D(3, 3) = (W(i, j, k) - W(i, j, k-1))/dZ
+                    D(:, :) = D(:, :)*U_C/L_C
+                    S(1, 1) = (D(1, 1) + D(1, 1))
+                    S(1, 2) = (D(1, 2) + D(2, 1))
+                    S(1, 3) = (D(1, 3) + D(3, 1))
+                    S(2, 1) = (D(2, 1) + D(1, 2))
+                    S(2, 2) = (D(2, 2) + D(2, 2))
+                    S(2, 3) = (D(2, 3) + D(3, 2))
+                    S(3, 1) = (D(3, 1) + D(1, 3))
+                    S(3, 2) = (D(3, 2) + D(2, 3))
+                    S(3, 3) = (D(3, 3) + D(3, 3))
+                    tmp = tmp + sum(S**2)
+                enddo
+            enddo
+        enddo
+        epsilon = 0.5d0*nu*tmp/(NX*NY*NZ)
+        eta = (nu**3/epsilon)**0.25d0
+        ! write(*, '(12e12.4)') Re_lambda, epsilon, eta, dX
+        ! ファイルの出力は省略
+
+    end subroutine all_time
+end module data
 
 program main
     use smac
     use fft
     use ibm
+    use data
     implicit none
     real(8) U(0:NX+1, 0:NY+1, 0:NZ+1), V(0:NX+1, 0:NY+1, 0:NZ+1), W(0:NX+1, 0:NY+1, 0:NZ+1)
     real(8) C(6, 0:NX+1, 0:NY+1, 0:NZ+1)
@@ -2354,7 +2458,7 @@ program main
 
     call fft_init
     call init(U, V, W, P, Phi, C, Fx, Fy, Fz)
-    if (input_step > 0) call input(U, V, W, P, C, Ax0, Ay0, Az0, Tx0, Ty0, Tz0)
+    if (input_type > 0) call input(U, V, W, P, C, Ax0, Ay0, Az0, Tx0, Ty0, Tz0)
     if (method == 2) call ibm_init(X, Y, Z, Xc, Yc, Zc, Uc, Vc, Wc, Fxc, Fyc, Fzc)
     if (method == 2) call ibm_vtk(Xc, Yc, Zc)
     ! if (method == 2) call ibm_get(Xc, Yc)
@@ -2420,32 +2524,34 @@ program main
             call fft_march(Up, Vp, Wp, U, V, W, Phi, P)
         endif
 
-        ! if (step > 50000) then
-        !     Fx(:, :, :) = 0.0d0
-        !     Fy(:, :, :) = 0.0d0
-        !     Fz(:, :, :) = 0.0d0
-        !     if (mod(step, 50) == 0) call get_data(U, V, W, C, step)
-        ! endif
-
         call cpu_time(t5)
+
+        if (mod(step, 20)==0) then
+            open(20, file=trim(dir)//'koide3.d', position='append')
+            write(20, *) step, C(1, NX/2, NY/2, NZ/2) + C(4, NX/2, NY/2, NZ/2) + C(6, NX/2, NY/2, NZ/2)
+            close(20)
+        endif
         
-        call logging(U, V, W, C, step, t_start)
-        if (mod(step, Gstep)==0) call vtk_binary(U, V, W, step)
-        if (mod(step, Gstep)==0) call scale_vtk(U, V, W, step)
-        ! if (mod(step, Gstep)==0) call vtk_ascii(U, V, W, 1000)
-        ! if (mod(step, Gstep)==0) call get_data(U, V, W, C, step)
-        ! if (mod(step, Gstep)==0) call get_data_xy(U, V, W, C, step)
-        ! if (mod(step, Gstep)==0) call get_data_xz(U, V, W, C, step)
-        if (mod(step, Gstep)==0) call get_data_binary(U, V, W, C, step)
-        if (mod(step, Gstep)==0 .and. flow_type == 4) call taylor_debug(U, V, W, step)
-        if (mod(step, Estep)==0) call energy_single(U, V, W, step)
-        if (mod(step, output_step)==0) call output(U, V, W, P, C, Ax, Ay, Az, Tx, Ty, Tz, step)
-        if (sum(U**2)*0.0d0 /= 0.0d0) stop 'NaN value'  ! NaNの判定
+        if (mod(step, Tstep)==0) call all_time(U, V, W, C, step)
+        if (mod(step, Tstep)==0) call energy_single(U, V, W, step)
+        if (mod(step, Lstep)==0) call log_progress(U, V, W, C, step, t_start)
+        
+        if (mod(step, Gstep)==0) then
+            ! call vtk_binary(U, V, W, step)
+            ! call scale_vtk(U, V, W, step)
+            ! call vtk_ascii(U, V, W, step)
+            ! call get_data(U, V, W, C, step)
+            ! call get_data_xy(U, V, W, C, step)
+            ! call get_data_xz(U, V, W, C, step)
+            call get_data_binary(U, V, W, C, step)
+        endif
+
+        if (mod(step, Ostep)==0) call output(U, V, W, P, C, Ax, Ay, Az, Tx, Ty, Tz)
+        ! if (sum(U**2)*0.0d0 /= 0.0d0) stop 'NaN value'  ! NaNの判定
         t12 = t12 + t2-t1
         t23 = t23 + t3-t2
         t34 = t34 + t4-t3
         t45 = t45 + t5-t4
-        ! write(*, '(12e12.4)') U(1:12, 1, 1)
     enddo
 
     call fft_finalize
@@ -2462,8 +2568,17 @@ program main
     
 end program main
 
+! 研究室サーバー
+! ifort fenep.f90 -lfftw3 -llapack -O3 && ./a.out
 
-! 名大スパコン
+! スパコン
 ! module load fftw
-! frtpx fenep.f90 -lfftw3
-! pjsub single.sh
+! frtpx fenep.f90 -lfftw3 -SSL2 -O3
+! jxsub single.sh
+
+! Total   :  7077.031[s]
+! C+-     :  5371.141[s]  75.895[%]
+! Newton  :  1421.922[s]  20.092[%]
+! Navier  :   216.016[s]   3.052[%]
+! Poisson :    67.156[s]   0.949[%]
+! Others  :     0.797[s]   0.011[%]

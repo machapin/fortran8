@@ -33,8 +33,8 @@ def vector_fig(data, step):
         if ziku=='z': x = data[:, 0]; y = data[:, 1]; U = data[:, 3]; V = data[:, 4]; xlabel = '$x$'; ylabel = '$y$'  # テイラー渦
         if ziku=='y': x = data[:, 0]; y = data[:, 2]; U = data[:, 3]; V = data[:, 5]; xlabel = '$x$'; ylabel = '$z$'  # クエット流れ
             
-        s = 1  # 矢印のサイズ
-        l = 2  # 間引き
+        s = 2  # 矢印のサイズ
+        l = 8  # 間引き
         U = U * s
         V = V * s
         fig = plt.figure(figsize=(5, 5))
@@ -184,8 +184,8 @@ def vector_fig(data, step):
 
 
 if __name__ == '__main__':
-    dir = 'v007'
+    dir = 'v008/data3'
     form = 'bin'  # 'd' or 'bin'
-    ziku = 'z'  # 'z' or 'y'
+    ziku = 'y'  # 'z' or 'y'
     ibm = 0
     vector()

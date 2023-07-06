@@ -1,30 +1,28 @@
 module smac
     implicit none
-    ! module load fftw
-    ! mpifrtpx fenep_mpi.f90 -lfftw3 -SSL2 -O3
-    ! jxsub run.sh
     include 'mpif.h'
     real(8), parameter :: PI = acos(-1.0d0)
     ! ステップ数
-    integer, parameter :: Nstep = 120000
-    integer, parameter :: Tstep = 100  ! 時系列データを取得する間隔
-    integer, parameter :: Lstep = 500  ! ログを表示する間隔
-    integer, parameter :: Gstep = 10000  ! Mapや渦度や配列を保存する間隔  コメントアウト外すこと!!!
+    integer, parameter :: Nstep = 100  ! 7桁まで
+    integer, parameter :: Tstep = 10 ! 時系列データを取得する間隔
+    integer, parameter :: Lstep = 10  ! ログを表示する間隔
+    integer, parameter :: Gstep = 100  ! Mapやエンストロフィやエネルギーを保存する間隔
+    integer, parameter :: Ostep = 5000  ! 配列を保存する間隔
     ! パラメータ
     integer, parameter :: NX = 256, NY = NX, NZ = NX
     real(8), parameter :: dX = 2*PI/NX, dY = 2*PI/NY, dZ = 2*PI/NZ  ! 規格化長さは2*PI
     real(8), parameter :: dt = 0.002d0
     ! 手法
-    integer, parameter :: input_type = 0  ! 0:初期条件なし、1:初期条件ありで1周、2:初期値ありで2周
+    integer, parameter :: input_type = 1  ! 0:初期条件なし、1:初期条件ありで1周、2:初期値ありで2周
     integer, parameter :: method = 2  ! 1:FFT、2:IBM
     integer, parameter :: ibm_type = 22  ! 11:円柱表面1つ、12:円柱表面4つ、21:円柱内部1つ、22:円柱内部4つ
     real(8), parameter :: DC = 2*PI / 4.0d0  ! 円柱の直径、円柱の中心点を確認すること！
     integer, parameter :: flow_type = 0  ! 0:外力なし(f=0)、3:テイラーグリーン外力、4:テイラーグリーン渦の減衰
-    integer, parameter :: eigen_method = 1  ! 0:カルダノ、1:シルベスター、2:LAPACK
+    integer, parameter :: eigen_method = 3  ! 0:カルダノ、1:シルベスター、3:ビエト
     ! 無次元パラメータ
-    ! real(8), parameter :: Re = 1.0d0
-    real(8), parameter :: beta = 0.9d0  ! 1.0、0.9
-    real(8), parameter :: Wi = 1.0d0  ! 0.04、0.2、1.0、5.0、25.0
+    ! real(8), parameter :: Re = 2.0d0
+    real(8), parameter :: beta = 1.0d0
+    real(8), parameter :: Wi = 5.0d0
     real(8), parameter :: Lp = 100.0d0
     ! 有次元パラメータ
     ! real(8), parameter :: L_C = 1.0d0  ! 長さが100なら100/2*PI
@@ -41,16 +39,10 @@ module smac
     real(8), parameter :: dX_C = dX*L_C, dY_C = dY*L_C, dZ_C = dZ*L_C
     real(8), parameter :: dt_C = dt*L_C/U_C
     ! その他
-    character(64) :: input_dir = './data/'
-    character(64) :: output_dir = './data/'
-    real(8) :: counter(0:3) = 0.0d0
-    real(8) :: Energy(0:NX) = 0.0d0
-    ! LAPACK用変数
-    integer :: info
-    real(8) :: A(3, 3), w0(3), work(3*3-1)
-    integer :: lwork = 3*3-1
+    character(64) :: input_dir = './'
+    character(64) :: output_dir = './debug/'
     ! MPI用変数
-    integer N_procs
+    integer N_procs, NY_procs
     integer ierr, procs, myrank
     integer next_rank, former_rank
     integer req1s, req1r, req2s, req2r
@@ -83,10 +75,10 @@ contains
         character(2) str
         write(str, '(I2.2)') ibm_type
 
-        if (myrank == 0) call mk_dir(output_dir)
+        N_procs = NZ / procs
+        NY_procs = NY / procs
 
         ! コメント
-        N_procs = NZ / procs
         if (mod(NZ, procs)/=0 .or. mod(NY, procs)/=0) stop 'NZ or NY is not divisible by procs'
         ! if (1.0d0*dt/dX>1.0d0/6 .or. 1.0d0*dt/dY>1.0d0/6 .or. 1.0d0*dt/dZ>1.0d0/6) stop 'CFL condition is not met.'
         if (myrank == 0) then
@@ -102,10 +94,13 @@ contains
 
         ! ファイルの初期化
         if (myrank == 0) then
-            open(10, file = trim(output_dir)//'all_time.d', status='replace')
-            close(10)
-            open(20, file = trim(output_dir)//'all_time_dif.d', status='replace')
-            close(20)
+            call rm_dir(trim(output_dir))
+            call mk_dir(trim(output_dir))
+            call mk_dir(trim(output_dir)//'Log/')
+            call mk_dir(trim(output_dir)//'Map/')
+            call mk_dir(trim(output_dir)//'Qti/')
+            call mk_dir(trim(output_dir)//'Cylinder/')
+            call mk_dir(trim(output_dir)//'Restart/')
         endif
 
         ! 乱数用
@@ -146,49 +141,45 @@ contains
         Fx_procs(:, :, :) = 0.0d0
         Fy_procs(:, :, :) = 0.0d0
         Fz_procs(:, :, :) = 0.0d0
-        ! デバッグ用
-        U_procs(:, :, :) = 1.0d0
-        V_procs(:, :, :) = 1.0d0
-        do k = 1, N_procs
-            do j = 1, NY
-                do i = 1, NX
-                    W_procs(i, j, k) = sin((myrank*N_procs+k-0.5d0)*dZ)
-                    ! W_procs(i, j, k) = cos((myrank*N_procs+k-0.5d0)*dZ)
-                enddo
-            enddo
-        enddo
+        call random_number(C_procs)
+        C_procs(:, :, :, :) = 0.001d0 * (C_procs(:, :, :, :)-0.5d0)
+        C_procs(1, :, :, :) = C_procs(1, :, :, :) + 1.0d0
+        C_procs(4, :, :, :) = C_procs(4, :, :, :) + 1.0d0
+        C_procs(6, :, :, :) = C_procs(6, :, :, :) + 1.0d0
         if (flow_type == 3) then
             do k = 1, N_procs
                 do j = 1, NY
                     do i = 1, NX
-                        Fx_procs(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)  ! 増田さん, 安房井さん
+                        Fx_procs(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)
                         Fy_procs(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
-                        ! Fx_procs(i, j, k) = -sin(i*dX) * cos((myrank*N_procs+k-0.5d0)*dZ)  ! x, z 増田さん, 安房井さん
+                        U_procs(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)/(2.0d0 * nu)
+                        V_procs(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)/(2.0d0 * nu)
+                        ! Fx_procs(i, j, k) = -sin(i*dX) * cos((myrank*N_procs+k-0.5d0)*dZ)
                         ! Fz_procs(i, j, k) = cos((i-0.5d0)*dX) * sin((myrank*N_procs+k)*dZ)
-                        ! Fx_procs(i, j, k) = -sin(2.0d0*(j-0.5d0)*dY)  ! 小井手さん
+                        ! Fx_procs(i, j, k) = -sin(2.0d0*(j-0.5d0)*dY)
                         ! Fy_procs(i, j, k) = sin(2.0d0*(i-0.5d0)*dX)
-                        ! Fx_procs(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY) * cos((myrank*N_procs + k-0.5d0)*dZ)  ! 荒木さん
+                        ! Fx_procs(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY) * cos((myrank*N_procs + k-0.5d0)*dZ)
                         ! Fy_procs(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY) * cos((myrank*N_procs + k-0.5d0)*dZ)
                     enddo
                 enddo
             enddo
+            ! デバッグモード
+            W_procs(:, :, :) = 0.0d0
+            C_procs(:, :, :, :) = 0.0d0
+            C_procs(1, :, :, :) = 1.0d0
+            C_procs(4, :, :, :) = 1.0d0
+            C_procs(6, :, :, :) = 1.0d0
         endif
         if (flow_type == 4) then
             do k = 1, N_procs
                 do j = 1, NY
                     do i = 1, NX
-                        U_procs(i, j, k) = -U_C * sin(i*dX) * cos((j-0.5d0)*dY)
-                        V_procs(i, j, k) = U_C * cos((i-0.5d0)*dX) * sin(j*dY)
+                        U_procs(i, j, k) = -sin(i*dX) * cos((j-0.5d0)*dY)
+                        V_procs(i, j, k) = cos((i-0.5d0)*dX) * sin(j*dY)
                     enddo
                 enddo
             enddo
         endif
-        call random_number(C_procs)
-        C_procs(:, :, :, :) = 0.001d0 * (C_procs(:, :, :, :)-0.5d0)
-        ! C_procs(:, :, :, :) = 0.0d0
-        C_procs(1, :, :, :) = C_procs(1, :, :, :) + 1.0d0
-        C_procs(4, :, :, :) = C_procs(4, :, :, :) + 1.0d0
-        C_procs(6, :, :, :) = C_procs(6, :, :, :) + 1.0d0
 
 
         ! のりしろ境界の通信先
@@ -273,8 +264,7 @@ contains
         real(8), intent(in) :: C_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1)
         real(8), intent(out) :: Cpx_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1), Cnx_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1)
         integer i, j, k, l, index
-        real(8) Cptemp(6, 3), Cntemp(6, 3), Eigen(3, 6), mintemp
-        counter(:) = 0.0d0
+        real(8) Cptemp(6, 3), Cntemp(6, 3), Eigen(6), minlist(4)
 
         do k = 1, N_procs
             do j = 1, NY
@@ -286,33 +276,34 @@ contains
                     Cptemp(:, 3) = C_procs(:, i-1, j, k)/4 + C_procs(:, i, j, k) - C_procs(:, i+1, j, k)/4
                     Cntemp(:, 3) = -C_procs(:, i-1, j, k)/4 + C_procs(:, i, j, k) + C_procs(:, i+1, j, k)/4
 
-                    Eigen(:, :) = 0.0d0
                     do l = 1, 3
-                        if (eigen_method == 0) call Cardano(Cptemp(:, l), Eigen(l, 1), Eigen(l, 2), Eigen(l, 3))  ! CardanoでCpnの95%ぐらい時間かかってる。
-                        if (eigen_method == 0) call Cardano(Cntemp(:, l), Eigen(l, 4), Eigen(l, 5), Eigen(l, 6))
-                        if (eigen_method == 1) call Sylvester(Cptemp(:, l), Eigen(l, 1))
-                        if (eigen_method == 1) call Sylvester(Cntemp(:, l), Eigen(l, 4))
-                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cptemp(:, l), 3, Eigen(l, 1:3), work, lwork, info)
-                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cntemp(:, l), 3, Eigen(l, 4:6), work, lwork, info)
-                    enddo
-
-                    index = 0
-                    mintemp = 0.0d0
-                    do l = 1, 3  ! 全ての固有値が正、最小固有値が最大
-                        if (minval(Eigen(l, :)) >= mintemp) then
-                            index = l
-                            mintemp = minval(Eigen(l, :))
+                        if (eigen_method == 0) then
+                            call Cardano(Cptemp(:, l), Eigen(1), Eigen(2), Eigen(3))  ! CardanoでCpnの95%ぐらい時間かかってる。
+                            call Cardano(Cntemp(:, l), Eigen(4), Eigen(5), Eigen(6))
+                            minlist(l) = minval(Eigen(:))
+                        endif
+                        if (eigen_method == 1) then
+                            call Sylvester(Cptemp(:, l), Eigen(1))
+                            call Sylvester(Cntemp(:, l), Eigen(2))
+                            minlist(l) = minval(Eigen(1:2))
+                        endif
+                        if (eigen_method == 3) then
+                            call Vieta(Cptemp(:, l), Eigen(1))
+                            call Vieta(Cntemp(:, l), Eigen(2))
+                            minlist(l) = minval(Eigen(1:2))
                         endif
                     enddo
+                    minlist(4) = 0.0d0
+                    index = maxloc(minlist, 1)
 
-                    if (index > 0) then
-                        Cpx_procs(:, i, j, k) = Cptemp(:, index)  ! 周期条件をそのまま使いたいため保存する場所を変更
-                        Cnx_procs(:, i, j, k) = Cntemp(:, index)
-                    else
+                    if (index == 4) then
                         Cpx_procs(:, i, j, k) = C_procs(:, i, j, k)
                         Cnx_procs(:, i, j, k) = C_procs(:, i, j, k)
+                    else
+                        if (eigen_method == 1) index = 3
+                        Cpx_procs(:, i, j, k) = Cptemp(:, index)  ! 周期条件をそのまま使いたいため保存する場所を変更
+                        Cnx_procs(:, i, j, k) = Cntemp(:, index)
                     endif
-                    ! counter(index) = counter(index) + 1
                 enddo
             enddo
         enddo
@@ -327,7 +318,7 @@ contains
         real(8), intent(in) :: C_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1)
         real(8), intent(out) :: Cpy_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1), Cny_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1)
         integer i, j, k, l, index
-        real(8) Cptemp(6, 3), Cntemp(6, 3), Eigen(3, 6), mintemp
+        real(8) Cptemp(6, 3), Cntemp(6, 3), Eigen(6), minlist(4)
 
         do k = 1, N_procs
             do j = 1, NY
@@ -339,33 +330,35 @@ contains
                     Cptemp(:, 3) = C_procs(:, i, j-1, k)/4 + C_procs(:, i, j, k) - C_procs(:, i, j+1, k)/4
                     Cntemp(:, 3) = -C_procs(:, i, j-1, k)/4 + C_procs(:, i, j, k) + C_procs(:, i, j+1, k)/4
 
-                    Eigen(:, :) = 0.0d0
+                    minlist(0:3) = 0.0d0
                     do l = 1, 3
-                        if (eigen_method == 0) call Cardano(Cptemp(:, l), Eigen(l, 1), Eigen(l, 2), Eigen(l, 3))  ! CardanoでCpnの95%ぐらい時間かかってる。
-                        if (eigen_method == 0) call Cardano(Cntemp(:, l), Eigen(l, 4), Eigen(l, 5), Eigen(l, 6))
-                        if (eigen_method == 1) call Sylvester(Cptemp(:, l), Eigen(l, 1))
-                        if (eigen_method == 1) call Sylvester(Cntemp(:, l), Eigen(l, 4))
-                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cptemp(:, l), 3, Eigen(l, 1:3), work, lwork, info)
-                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cntemp(:, l), 3, Eigen(l, 4:6), work, lwork, info)
-                    enddo
-
-                    index = 0
-                    mintemp = 0.0d0
-                    do l = 1, 3  ! 全ての固有値が正、最小固有値が最大
-                        if (minval(Eigen(l, :)) >= mintemp) then
-                            index = l
-                            mintemp = minval(Eigen(l, :))
+                        if (eigen_method == 0) then
+                            call Cardano(Cptemp(:, l), Eigen(1), Eigen(2), Eigen(3))  ! CardanoでCpnの95%ぐらい時間かかってる。
+                            call Cardano(Cntemp(:, l), Eigen(4), Eigen(5), Eigen(6))
+                            minlist(l) = minval(Eigen(:))
+                        endif
+                        if (eigen_method == 1) then
+                            call Sylvester(Cptemp(:, l), Eigen(1))
+                            call Sylvester(Cntemp(:, l), Eigen(2))
+                            minlist(l) = minval(Eigen(1:2))
+                        endif
+                        if (eigen_method == 3) then
+                            call Vieta(Cptemp(:, l), Eigen(1))
+                            call Vieta(Cntemp(:, l), Eigen(2))
+                            minlist(l) = minval(Eigen(1:2))
                         endif
                     enddo
+                    minlist(4) = 0.0d0
+                    index = maxloc(minlist, 1)
 
-                    if (index > 0) then
-                        Cpy_procs(:, i, j, k) = Cptemp(:, index)
-                        Cny_procs(:, i, j, k) = Cntemp(:, index)
-                    else
+                    if (index == 4) then
                         Cpy_procs(:, i, j, k) = C_procs(:, i, j, k)
                         Cny_procs(:, i, j, k) = C_procs(:, i, j, k)
+                    else
+                        if (eigen_method == 1) index = 3
+                        Cpy_procs(:, i, j, k) = Cptemp(:, index)
+                        Cny_procs(:, i, j, k) = Cntemp(:, index)
                     endif
-                    ! counter(index) = counter(index) + 1
                 enddo
             enddo
         enddo
@@ -380,7 +373,7 @@ contains
         real(8), intent(in) :: C_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1)
         real(8), intent(out) :: Cpz_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1), Cnz_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1)
         integer i, j, k, l, index
-        real(8) Cptemp(6, 3), Cntemp(6, 3), Eigen(3, 6), mintemp
+        real(8) Cptemp(6, 3), Cntemp(6, 3), Eigen(6), minlist(4)
 
         do k = 1, N_procs
             do j = 1, NY
@@ -392,33 +385,35 @@ contains
                     Cptemp(:, 3) = C_procs(:, i, j, k-1)/4 + C_procs(:, i, j, k) - C_procs(:, i, j, k+1)/4
                     Cntemp(:, 3) = -C_procs(:, i, j, k-1)/4 + C_procs(:, i, j, k) + C_procs(:, i, j, k+1)/4
 
-                    Eigen(:, :) = 0.0d0
+                    minlist(0:3) = 0.0d0
                     do l = 1, 3
-                        if (eigen_method == 0) call Cardano(Cptemp(:, l), Eigen(l, 1), Eigen(l, 2), Eigen(l, 3))  ! CardanoでCpnの95%ぐらい時間かかってる。
-                        if (eigen_method == 0) call Cardano(Cntemp(:, l), Eigen(l, 4), Eigen(l, 5), Eigen(l, 6))
-                        if (eigen_method == 1) call Sylvester(Cptemp(:, l), Eigen(l, 1))
-                        if (eigen_method == 1) call Sylvester(Cntemp(:, l), Eigen(l, 4))
-                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cptemp(:, l), 3, Eigen(l, 1:3), work, lwork, info)
-                        if (eigen_method == 2) call dsyev('N', 'U', 3, Cntemp(:, l), 3, Eigen(l, 4:6), work, lwork, info)
-                    enddo
-
-                    index = 0
-                    mintemp = 0.0d0
-                    do l = 1, 3  ! 全ての固有値が正、最小固有値が最大
-                        if (minval(Eigen(l, :)) >= mintemp) then
-                            index = l
-                            mintemp = minval(Eigen(l, :))
+                        if (eigen_method == 0) then
+                            call Cardano(Cptemp(:, l), Eigen(1), Eigen(2), Eigen(3))  ! CardanoでCpnの95%ぐらい時間かかってる。
+                            call Cardano(Cntemp(:, l), Eigen(4), Eigen(5), Eigen(6))
+                            minlist(l) = minval(Eigen(:))
+                        endif
+                        if (eigen_method == 1) then
+                            call Sylvester(Cptemp(:, l), Eigen(1))
+                            call Sylvester(Cntemp(:, l), Eigen(2))
+                            minlist(l) = minval(Eigen(1:2))
+                        endif
+                        if (eigen_method == 3) then
+                            call Vieta(Cptemp(:, l), Eigen(1))
+                            call Vieta(Cntemp(:, l), Eigen(2))
+                            minlist(l) = minval(Eigen(1:2))
                         endif
                     enddo
+                    minlist(4) = 0.0d0
+                    index = maxloc(minlist, 1)
 
-                    if (index > 0) then
-                        Cpz_procs(:, i, j, k) = Cptemp(:, index)
-                        Cnz_procs(:, i, j, k) = Cntemp(:, index)
-                    else
+                    if (index == 4) then
                         Cpz_procs(:, i, j, k) = C_procs(:, i, j, k)
                         Cnz_procs(:, i, j, k) = C_procs(:, i, j, k)
+                    else
+                        if (eigen_method == 1) index = 3
+                        Cpz_procs(:, i, j, k) = Cptemp(:, index)
+                        Cnz_procs(:, i, j, k) = Cntemp(:, index)
                     endif
-                    ! counter(index) = counter(index) + 1
                 enddo
             enddo
         enddo
@@ -468,6 +463,27 @@ contains
             re2 = real(e2)
         endif
     end subroutine Cardano
+
+    subroutine Vieta(a, x)
+        real(8), intent(in) :: a(6)
+        real(8), intent(out) :: x
+        real(8) a0, a1, a2, p, q, t
+
+        a2 = -(a(1) + a(4) + a(6))
+        a1 = a(1)*a(4) + a(4)*a(6) + a(6)*a(1) - a(5)*a(5) - a(3)*a(3) - a(2)*a(2)
+        a0 = -(a(1)*a(4)*a(6) + a(2)*a(5)*a(3) + a(2)*a(5)*a(3) - a(1)*a(5)*a(5) - a(2)*a(2)*a(6) - a(3)*a(4)*a(3))
+
+        p = a1 - a2**2/3.0d0
+        q = a0 - a1*a2/3.0d0 + 2.0d0*a2**3/27.0d0
+        t = (q/2.0d0)**2 + (p/3.0d0)**3  ! 三次方程式の判別式
+
+        if (t >= 0.0d0) then
+            x = -100.0d0  ! 選ばれないようにする
+        else
+            x = 2.0d0*sqrt(-p/3.0d0)*cos(acos(3.0d0*q/(2.0d0*p)*sqrt(-3.0d0/p))/3.0d0 + 2.0d0*PI/3.0d0) - a2/3.0d0
+        endif
+
+    end subroutine Vieta
 
     subroutine Sylvester(a, b)
         real(8), intent(in) :: a(6)
@@ -817,9 +833,7 @@ contains
             C(:, :, :, 0) = C(:, :, :, NZ)
             C(:, :, :, NZ+1) = C(:, :, :, 1)
 
-            call mk_dir(trim(output_dir)//'Map/')
             write(str, '(I8.8)') step
-            
             open(10, file=trim(output_dir)//'Map/z_'//str//'.bin', form='unformatted', status='replace', access='stream')
             k = NZ/2  ! x-y平面
             do j = 1, NY
@@ -846,7 +860,7 @@ contains
                     S(3) = (D(2, 1) + D(1, 2))
                     Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
                     trC = C(1, i, j, k) + C(4, i, j, k) + C(6, i, j, k)
-                    write(10) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, E(1), E(2), E(3), sum(E**2)/2, &
+                    write(10) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, E(1), E(2), E(3), Qti, &
                               Omega(1), Omega(2), Omega(3), sum(Omega**2)/2, &
                               trC, C(1, i, j, k), C(2, i, j, k), C(3, i, j, k), C(4, i, j, k), C(5, i, j, k), C(6, i, j, k)
                 enddo
@@ -880,7 +894,7 @@ contains
                     S(3) = (D(2, 1) + D(1, 2))
                     Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
                     trC = C(1, i, j, k) + C(4, i, j, k) + C(6, i, j, k)
-                    write(20) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, E(1), E(2), E(3), sum(E**2)/2, &
+                    write(20) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, E(1), E(2), E(3), Qti, &
                               Omega(1), Omega(2), Omega(3), sum(Omega**2)/2, &
                               trC, C(1, i, j, k), C(2, i, j, k), C(3, i, j, k), C(4, i, j, k), C(5, i, j, k), C(6, i, j, k)
                 enddo
@@ -913,7 +927,7 @@ contains
                     S(3) = (D(2, 1) + D(1, 2))
                     Qti = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)
                     trC = C(1, i, j, k) + C(4, i, j, k) + C(6, i, j, k)
-                    write(30) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, E(1), E(2), E(3), sum(E**2)/2, &
+                    write(30) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, (k-0.5d0)*dZ_C, E(1), E(2), E(3), Qti, &
                               Omega(1), Omega(2), Omega(3), sum(Omega**2)/2, &
                               trC, C(1, i, j, k), C(2, i, j, k), C(3, i, j, k), C(4, i, j, k), C(5, i, j, k), C(6, i, j, k)
                 enddo
@@ -964,9 +978,6 @@ contains
         character(8) str
         write(str, '(I8.8)') myrank
 
-        if (myrank == 0) call mk_dir(trim(output_dir)//'Restart/')
-        call MPI_Barrier(MPI_COMM_WORLD)  ! フォルダが作成できるまで待機
-
         open(100, file=trim(output_dir)//'Restart/'//str//'.bin', form='unformatted', status='replace')  ! 上書き保存する
         do k = 1, N_procs
             do j = 1, NY
@@ -984,11 +995,17 @@ contains
         real(8), intent(in) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
         integer, intent(in) :: step
         integer i, j, k
-        real(8) D(3, 3), Omega(3), Enstrophy_procs(1:NX, 1:NY, 1:N_procs), Enstrophy(1:NX, 1:NY, 1:NZ)
+        real(8) D(3, 3), Omega(3), Scalar_procs(1:NX, 1:NY, 1:N_procs), Scalar(1:NX, 1:NY, 1:NZ)
         character(8) str
+        character(8) key
         character(120) buffer
         character lf
         lf = char(10)  ! 改行コード
+
+        if (step < 10000000) key = 'Qti'
+        if (10000000 <= step .and. step < 20000000) key = 'QtiA'
+        if (20000000 <= step .and. step < 30000000) key = 'QtiB'
+        if (30000000 <= step) key = 'QtiC'
 
         do k = 1, N_procs
             do j = 1, NY
@@ -1007,21 +1024,21 @@ contains
                     Omega(1) = (D(3, 2) - D(2, 3))
                     Omega(2) = (D(1, 3) - D(3, 1))
                     Omega(3) = (D(2, 1) - D(1, 2))
-                    Enstrophy_procs(i, j, k) = sum(Omega**2)/2
+                    ! Scalar_procs(i, j, k) = sum(Omega**2)/2  ! Enstrophy
+                    Scalar_procs(i, j, k) = D(2, 2)*D(3, 3) - D(3, 2)*D(2, 3) + D(1, 1)*D(2, 2) - D(2, 1)*D(1, 2) + D(1, 1)*D(3, 3) - D(3, 1)*D(1, 3)  ! Qti
                 enddo
             enddo
         enddo
-        call MPI_Gather(Enstrophy_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Enstrophy(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
+        call MPI_Gather(Scalar_procs(1, 1, 1), NX*NY*N_procs, MPI_REAL8, Scalar(1, 1, 1), NX*NY*N_procs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
         
         if (myrank == 0) then
-            write(str, '(I8.8)') step
-            call mk_dir(trim(output_dir)//'Enstrophy/')
-            open(10, file=trim(output_dir)//'Enstrophy/Enstrophy_'//str//'.vtk', status='replace', form='unformatted', &
+            write(str, '(I8.8)') mod(step, 10000000)/Gstep  ! 連番にするため
+            open(10, file=trim(output_dir)//'Qti/'//trim(key)//'_'//str//'.vtk', status='replace', form='unformatted', &
                     action='write', access='stream', convert='big_endian')
 
             write(buffer,'(a)') '# vtk DataFile Version 3.0'//lf
             write(10) trim(buffer)
-            write(buffer,'(a)') 'Enstrophy'//lf
+            write(buffer,'(a)') 'Qti'//lf
             write(10) trim(buffer)
             write(buffer,'(a)') 'BINARY'//lf
             write(10) trim(buffer)
@@ -1035,14 +1052,14 @@ contains
             write(10) trim(buffer)
             write(buffer,'(a, i10)') lf//'POINT_DATA ', NX*NY*NZ
             write(10) trim(buffer)
-            write(buffer,'(a)') lf//'SCALARS '//'Enstrophy'//' double'//lf
+            write(buffer,'(a)') lf//'SCALARS '//'Qti'//' float'//lf  ! doubleだと倍精度
             write(10) trim(buffer)
             write(buffer,'(a)') 'LOOKUP_TABLE default'//lf
             write(10) trim(buffer)
             do k = 1, NZ
                 do j = 1, NY
                     do i = 1, NX
-                        write(10) Enstrophy(i, j, k)
+                        write(10) real(Scalar(i, j, k))  ! 単精度で十分
                     enddo
                 enddo
             enddo
@@ -1058,21 +1075,31 @@ contains
         call system(command)
     end subroutine mk_dir
 
+    subroutine rm_dir(outdir)
+        implicit none
+        character(*), intent(in) :: outdir
+        character(256) command
+        write(command, *) 'rm -r ', trim(outdir)
+        call system(command)
+    end subroutine rm_dir
+
 end module smac
 
 module fft
     use smac
     implicit none
     include 'fftw3.f'
-    integer(8) plan1, plan2, plan3, plan4
-    real(8) Re1(1:NX, 1:NY)
-    complex(8) Im1(1:NX/2+1, 1:NY), Im2(1:NZ), Im3(1:NZ)
+    integer(8) plan1, plan2, plan3, plan4, plan5, plan6
+    real(8) Re1(1:NX, 1:NY), Re5(1:Nstep)
+    complex(8) Im1(1:NX/2+1, 1:NY), Im2(1:NZ), Im3(1:NZ), Im5(1:Nstep/2+1)
 contains
     subroutine fft_init
         call dfftw_plan_dft_r2c_2d(plan1, NX, NY, Re1, Im1, FFTW_ESTIMATE)
         call dfftw_plan_dft_1d(plan2, NZ, Im2, Im3, FFTW_FORWARD, FFTW_ESTIMATE)
         call dfftw_plan_dft_1d(plan3, NZ, Im3, Im2, FFTW_BACKWARD, FFTW_ESTIMATE)
         call dfftw_plan_dft_c2r_2d(plan4, NX, NY, Im1, Re1, FFTW_ESTIMATE)
+        call dfftw_plan_dft_r2c_1d(plan5, Nstep, Re5, Im5, FFTW_ESTIMATE)
+        call dfftw_plan_dft_c2r_1d(plan6, Nstep, Im5, Re5, FFTW_ESTIMATE)
     end subroutine fft_init
 
     subroutine fftr2c_2d(input, output)
@@ -1107,31 +1134,42 @@ contains
         output(:, :) = Re1(:, :)
     end subroutine fftc2r_2d
 
+    ! 時系列方向のフーリエ変換用
+    subroutine fftr2c_1d(input, output)
+        real(8), intent(in) :: input(1:Nstep)
+        complex(8), intent(out) :: output(1:Nstep/2+1)
+        Re5(:) = input(:)
+        call dfftw_execute(plan5, Re5, Im5)
+        output(:) = Im5(:)
+    end subroutine fftr2c_1d
+
+    subroutine fftc2r_1d(input, output)
+        complex(8), intent(in) :: input(1:Nstep/2+1)
+        real(8), intent(out) :: output(1:Nstep)
+        Im5(:) = input(:)
+        call dfftw_execute(plan6, Im5, Re5)
+        output(:) = Re5(:)
+    end subroutine fftc2r_1d
+
     subroutine fft_finalize
         call dfftw_destroy_plan(plan1)
         call dfftw_destroy_plan(plan2)
         call dfftw_destroy_plan(plan3)
         call dfftw_destroy_plan(plan4)
+        call dfftw_destroy_plan(plan5)
+        call dfftw_destroy_plan(plan6)
     end subroutine fft_finalize
 
 
     subroutine fft_solve(Q_procs, LHS_procs, Phi_procs)
         real(8), intent(in) :: Q_procs(1:NX, 1:NY, 1:N_procs)
-        real(8), intent(in) :: LHS_procs(1:NX/2+1, 1:NY/procs, 1:NZ)
+        real(8), intent(in) :: LHS_procs(1:NX/2+1, 1:NY_procs, 1:NZ)
         real(8), intent(out) :: Phi_procs(1:NX, 1:NY, 1:N_procs)
-        complex(8), allocatable :: Q_hat_procs(:, :, :), Phi_hat_procs(:, :, :)
-        complex(8), allocatable :: Q_hat_hat_procs(:, :, :), Phi_hat_hat_procs(:, :, :)
-        complex(8), allocatable :: Z_procs(:, :, :)
-        complex(8), allocatable :: T1_procs(:, :, :, :), T2_procs(:, :, :, :)
+        complex(8) Q_hat_procs(1:NX/2+1, 1:NY, 1:N_procs), Phi_hat_procs(1:NX/2+1, 1:NY, 1:N_procs)
+        complex(8) Q_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ), Phi_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ)
+        complex(8) Z_procs(1:NX/2+1, 1:NY_procs, 1:NZ)
+        complex(8) T1_procs(1:NX/2+1, 1:NY_procs, 1:procs, 1:N_procs), T2_procs(1:NX/2+1, 1:NY_procs, 1:N_procs, 1:procs)
         integer i, j, k
-        integer NY_procs
-
-        NY_procs = NY / procs
-        allocate(Q_hat_procs(1:NX/2+1, 1:NY, 1:N_procs), Phi_hat_procs(1:NX/2+1, 1:NY, 1:N_procs))
-        allocate(Q_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ), Phi_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
-        allocate(Z_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
-        allocate(T1_procs(1:NX/2+1, 1:NY_procs, 1:procs, 1:N_procs), T2_procs(1:NX/2+1, 1:NY_procs, 1:N_procs, 1:procs))
-
 
         ! 右辺をx,y方向にfft
         do k = 1, N_procs
@@ -1200,10 +1238,8 @@ contains
         real(8), intent(in) :: Fx_procs(1:NX, 1:NY, 1:N_procs), Fy_procs(1:NX, 1:NY, 1:N_procs), Fz_procs(1:NX, 1:NY, 1:N_procs)
         integer, intent(in) :: step
         real(8) Q_procs(1:NX, 1:NY, 1:N_procs)
-        real(8) LHS_procs(1:NX/2+1, 1:NY/procs, 1:NZ)
+        real(8) LHS_procs(1:NX/2+1, 1:NY_procs, 1:NZ)
         integer i, j, k
-        integer NY_procs
-        NY_procs = NY / procs
 
         if (step==1 .and. input_type==0) then  ! 1ステップ目のみ例外処理
             Ax0_procs(:, :, :) = Ax_procs(:, :, :)
@@ -1291,10 +1327,8 @@ contains
         real(8), intent(in) :: Up_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Vp_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Wp_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
         real(8), intent(out) :: Phi_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
         real(8) Q_procs(1:NX, 1:NY, 1:N_procs)
-        real(8) LHS_procs(1:NX/2+1, 1:NY/procs, 1:NZ)
+        real(8) LHS_procs(1:NX/2+1, 1:NY_procs, 1:NZ)
         integer i, j, k
-        integer NY_procs
-        NY_procs = NY / procs
 
         ! 右辺の計算
         do k = 1, N_procs
@@ -1378,19 +1412,11 @@ contains
 
     subroutine fft_forward(Q_procs, Q_hat_hat_procs)
         real(8), intent(in) :: Q_procs(1:NX, 1:NY, 1:N_procs)
-        complex(8), allocatable :: Q_hat_procs(:, :, :)
-        complex(8), allocatable :: Q_hat_hat_procs(:, :, :)
-        complex(8), allocatable :: Z_procs(:, :, :)
-        complex(8), allocatable :: T1_procs(:, :, :, :), T2_procs(:, :, :, :)
+        complex(8), intent(out) :: Q_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ)
+        complex(8) Q_hat_procs(1:NX/2+1, 1:NY, 1:N_procs)
+        complex(8) Z_procs(1:NX/2+1, 1:NY_procs, 1:NZ)
+        complex(8) T1_procs(1:NX/2+1, 1:NY_procs, 1:procs, 1:N_procs), T2_procs(1:NX/2+1, 1:NY_procs, 1:N_procs, 1:procs)
         integer i, j, k
-        integer NY_procs
-
-        NY_procs = NY / procs
-        allocate(Q_hat_procs(1:NX/2+1, 1:NY, 1:N_procs))
-        allocate(Q_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
-        allocate(Z_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
-        allocate(T1_procs(1:NX/2+1, 1:NY_procs, 1:procs, 1:N_procs), T2_procs(1:NX/2+1, 1:NY_procs, 1:N_procs, 1:procs))
-
 
         ! x,y方向にfft
         do k = 1, N_procs
@@ -1409,26 +1435,41 @@ contains
                 call fftc2c_1d_forward(Z_procs(i, j, :), Q_hat_hat_procs(i, j, :))
             enddo
         enddo
-        Q_hat_hat_procs(:, :, :) = Q_hat_hat_procs(:, :, :)/(NX*NY*NZ)  ! 格子点数の半分
+        Q_hat_hat_procs(:, :, :) = Q_hat_hat_procs(:, :, :)/(NX*NY*NZ)
 
-        deallocate(Q_hat_procs, Z_procs, T1_procs, T2_procs)  ! 214000目で発生するエラー対策
     end subroutine fft_forward
+
+    subroutine fft_z(Q_procs, Q_hat_procs)
+        real(8), intent(in) :: Q_procs(1:NX, 1:NY, 1:N_procs)
+        complex(8), intent(out) :: Q_hat_procs(1:NX, 1:NY_procs, 1:NZ)
+        complex(8) Z_procs(1:NX, 1:NY_procs, 1:NZ)
+        complex(8) T1_procs(1:NX, 1:NY_procs, 1:procs, 1:N_procs), T2_procs(1:NX, 1:NY_procs, 1:N_procs, 1:procs)
+        integer i, j
+
+        ! 軸変換  z分割をy分割に変更
+        T1_procs(:, :, :, :) = reshape(Q_procs, shape(T1_procs))
+        T2_procs(:, :, :, :) = reshape(T1_procs, shape(T2_procs), order=[1, 2, 4, 3])
+        call MPI_Alltoall(T2_procs(1, 1, 1, 1), NX*NY_procs*N_procs, MPI_DOUBLE_COMPLEX, &
+                          Z_procs(1, 1, 1), NX*NY_procs*N_procs, MPI_DOUBLE_COMPLEX, MPI_COMM_WORLD, ierr)
+
+        ! z方向にfft
+        do j = 1, NY_procs
+            do i = 1, NX
+                call fftc2c_1d_forward(Z_procs(i, j, :), Q_hat_procs(i, j, :))  ! c2cだからNZのままでok
+            enddo
+        enddo
+        Q_hat_procs(:, :, :) = Q_hat_procs(:, :, :)/NZ
+
+    end subroutine fft_z
 
 
     subroutine fft_backward(Phi_hat_hat_procs, Phi_procs)
-        complex(8), intent(inout) :: Phi_hat_hat_procs(:, :, :)  ! 入力の配列にはallocatableはいらない
+        complex(8), intent(inout) :: Phi_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ)
         real(8), intent(out) :: Phi_procs(1:NX, 1:NY, 1:N_procs)
-        complex(8), allocatable :: Phi_hat_procs(:, :, :)
-        complex(8), allocatable :: Z_procs(:, :, :)
-        complex(8), allocatable :: T1_procs(:, :, :, :), T2_procs(:, :, :, :)
+        complex(8) Phi_hat_procs(1:NX/2+1, 1:NY, 1:N_procs)
+        complex(8) Z_procs(1:NX/2+1, 1:NY_procs, 1:NZ)
+        complex(8) T1_procs(1:NX/2+1, 1:NY_procs, 1:procs, 1:N_procs), T2_procs(1:NX/2+1, 1:NY_procs, 1:N_procs, 1:procs)
         integer i, j, k
-        integer NY_procs
-
-        NY_procs = NY / procs
-        allocate(Phi_hat_procs(1:NX/2+1, 1:NY, 1:N_procs))
-        ! allocate(Phi_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))  ! allocateされた配列を引数にとる場合、allocateはしない
-        allocate(Z_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
-        allocate(T1_procs(1:NX/2+1, 1:NY_procs, 1:procs, 1:N_procs), T2_procs(1:NX/2+1, 1:NY_procs, 1:N_procs, 1:procs))
 
         ! z方向に逆fft
         do j = 1, NY_procs
@@ -1454,23 +1495,13 @@ contains
     subroutine scale_vtk(U_procs, V_procs, W_procs, step)  ! 渦のスケール分解
         real(8), intent(in) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
         integer, intent(in) :: step
-        complex(8), allocatable :: U_hat_hat_procs(:, :, :), V_hat_hat_procs(:, :, :), W_hat_hat_procs(:, :, :)
-        complex(8), allocatable :: U_hat_scale_procs(:, :, :, :), V_hat_scale_procs(:, :, :, :), W_hat_scale_procs(:, :, :, :)
+        complex(8) U_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ), V_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ), W_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ)
+        complex(8) U_hat_scale_procs(3, 1:NX/2+1, 1:NY_procs, 1:NZ),V_hat_scale_procs(3, 1:NX/2+1, 1:NY_procs, 1:NZ), W_hat_scale_procs(3, 1:NX/2+1, 1:NY_procs, 1:NZ)
+        real(8) K_abs_procs(1:NX/2+1, 1:NY_procs, 1:NZ)
         real(8) U_tmp_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_tmp_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_tmp_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
-        real(8), allocatable :: K_abs_procs(:, :, :)
         integer i, j, k, index
         real(8) k_index(4)
         real(8) kx, ky, kz
-        integer NY_procs
-        NY_procs = NY / procs
-        
-        ! allocate(U_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
-        ! allocate(V_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
-        ! allocate(W_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
-        allocate(U_hat_scale_procs(3, 1:NX/2+1, 1:NY_procs, 1:NZ))
-        allocate(V_hat_scale_procs(3, 1:NX/2+1, 1:NY_procs, 1:NZ))
-        allocate(W_hat_scale_procs(3, 1:NX/2+1, 1:NY_procs, 1:NZ))
-        allocate(K_abs_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
 
         ! 速度場をフーリエ変換
         call fft_forward(U_procs(1:NX, 1:NY, 1:N_procs), U_hat_hat_procs)
@@ -1903,10 +1934,7 @@ contains
         real(8), intent(in) :: Bx_procs(1:NX, 1:NY, 1:N_procs), By_procs(1:NX, 1:NY, 1:N_procs), Bz_procs(1:NX, 1:NY, 1:N_procs)
         real(8), intent(out) :: Up_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Vp_procs(0:NX+1, 0:NY+1, 0:N_procs+1), Wp_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
         integer i, j, k
-        real(8) Q_procs(1:NX, 1:NY, 1:N_procs), LHS_procs(1:NX/2+1, 1:NY/procs, 1:NZ)
-        integer NY_procs
-
-        NY_procs = NY / procs
+        real(8) Q_procs(1:NX, 1:NY, 1:N_procs), LHS_procs(1:NX/2+1, 1:NY_procs, 1:NZ)
 
         ! 左辺の定数部分の計算
         do k = 1, NZ
@@ -1956,18 +1984,53 @@ contains
     end subroutine ibm_predict
 
 
-    subroutine ave_init(U_ave_procs, V_ave_procs, W_ave_procs, U_rms_procs, V_rms_procs, W_rms_procs)
+    subroutine ave_init(U_ave_procs, V_ave_procs, W_ave_procs, U_rms_procs, V_rms_procs, W_rms_procs, Energy_map_procs, U_step_procs, V_step_procs, W_step_procs)
         real(8), allocatable :: U_ave_procs(:, :, :), V_ave_procs(:, :, :), W_ave_procs(:, :, :)
         real(8), allocatable :: U_rms_procs(:, :, :), V_rms_procs(:, :, :), W_rms_procs(:, :, :)
+        real(8), allocatable :: Energy_map_procs(:, :, :)
+        real(8), allocatable :: U_step_procs(:, :), V_step_procs(:, :), W_step_procs(:, :)
+
         allocate(U_ave_procs(1:NX, 1:NY, 1:N_procs), V_ave_procs(1:NX, 1:NY, 1:N_procs), W_ave_procs(1:NX, 1:NY, 1:N_procs))
         allocate(U_rms_procs(1:NX, 1:NY, 1:N_procs), V_rms_procs(1:NX, 1:NY, 1:N_procs), W_rms_procs(1:NX, 1:NY, 1:N_procs))
+        allocate(Energy_map_procs(1:NX, 1:NY_procs, 0:NZ))
+        allocate(U_step_procs(1:N_procs, 1:Nstep), V_step_procs(1:N_procs, 1:Nstep), W_step_procs(1:N_procs, 1:Nstep))
+        ! あるx, yに対し、z座標における速度を全ステップで保存
         U_ave_procs(:, :, :) = 0.0d0
         V_ave_procs(:, :, :) = 0.0d0
         W_ave_procs(:, :, :) = 0.0d0
         U_rms_procs(:, :, :) = 0.0d0
         V_rms_procs(:, :, :) = 0.0d0
         W_rms_procs(:, :, :) = 0.0d0
+        Energy_map_procs(:, :, :) = 0.0d0
+        U_step_procs(:, :) = 0.0d0
+        V_step_procs(:, :) = 0.0d0
+        W_step_procs(:, :) = 0.0d0
     end subroutine ave_init
+
+    subroutine ave_mean(U_ave_procs, V_ave_procs, W_ave_procs)
+        real(8), intent(inout) :: U_ave_procs(1:NX, 1:NY, 1:N_procs), V_ave_procs(1:NX, 1:NY, 1:N_procs), W_ave_procs(1:NX, 1:NY, 1:N_procs)
+        real(8) U_ave_mean(1:NX, 1:NY), V_ave_mean(1:NX, 1:NY), W_ave_mean(1:NX, 1:NY)
+        real(8) U_ave_tmp(1:NX, 1:NY), V_ave_tmp(1:NX, 1:NY), W_ave_tmp(1:NX, 1:NY)
+        integer i, j, k
+        do j = 1, NY
+            do i = 1, NX
+                U_ave_mean(i, j) = sum(U_ave_procs(i, j, :))/NZ
+                V_ave_mean(i, j) = sum(V_ave_procs(i, j, :))/NZ
+                W_ave_mean(i, j) = sum(W_ave_procs(i, j, :))/NZ
+            enddo
+        enddo
+
+        call MPI_Allreduce(U_ave_mean, U_ave_tmp, NX*NY, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        call MPI_Allreduce(V_ave_mean, V_ave_tmp, NX*NY, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        call MPI_Allreduce(W_ave_mean, W_ave_tmp, NX*NY, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+
+        do k = 1, N_procs
+            U_ave_procs(:, :, k) = U_ave_tmp(:, :)
+            V_ave_procs(:, :, k) = V_ave_tmp(:, :)
+            W_ave_procs(:, :, k) = W_ave_tmp(:, :)
+        enddo
+        
+    end subroutine ave_mean
 
 
     subroutine ibm_var(U_rms_procs, V_rms_procs, W_rms_procs)
@@ -2011,7 +2074,6 @@ contains
         if (myrank == 0) then
             do l = 1, NC
                 write(str, '(I8.8)') l
-                call mk_dir(trim(output_dir)//'Cylinder/')
                 open(10, file=trim(output_dir)//'Cylinder/'//'Cylinder_'//str//'.vtk', status='replace', form='unformatted', &
                         action='write', access='stream', convert='big_endian')
 
@@ -2026,14 +2088,14 @@ contains
                 write(10) trim(buffer)
                 write(buffer,'(a, 3(1x, i4))') 'DIMENSIONS', NR, NR, NZ
                 write(10) trim(buffer)
-                write(buffer,'(a, i10, a)') lf//'POINTS ', NR*NR*NZ, 'double'//lf
+                write(buffer,'(a, i10, a)') lf//'POINTS ', NR*NR*NZ, 'float'//lf  ! doubleだと倍精度
                 write(10) trim(buffer)
                 do n = 1, NZ
                     do o = 1, NR  ! 3次元で円柱描くとき必要
                         do m = 1, NR-1  ! NLではなくNR-1まで
-                            write(10) Xc(l, m, n)*L_C, Yc(l, m, n)*L_C, Zc(l, m, n)*L_C
+                            write(10) real(Xc(l, m, n)*L_C), real(Yc(l, m, n)*L_C), real(Zc(l, m, n)*L_C)
                         enddo
-                        write(10) Xc(l, 1, n)*L_C, Yc(l, 1, n)*L_C, Zc(l, 1, n)*L_C
+                        write(10) real(Xc(l, 1, n)*L_C), real(Yc(l, 1, n)*L_C), real(Zc(l, 1, n)*L_C)
                     enddo
                 enddo
 
@@ -2046,7 +2108,7 @@ contains
                 write(10) trim(buffer)
 
                 do n = 1, NR*NR*NZ
-                    write(10) n-1
+                    write(10) 1  ! n-1
                 enddo
                 close(10)
             enddo
@@ -2092,7 +2154,7 @@ contains
         call MPI_Allreduce(W_tmp, W_tmp_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
         K_energy = (U_tmp_sum + V_tmp_sum + W_tmp_sum)/2.0d0
         if (K_energy*0.0d0 /= 0.0d0) then
-            if (myrank == 0) write(*, *) 'step:', step 
+            if (myrank == 0) write(*, *) 'step:', step, 'NaN value'
             stop 'NaN value'  ! NaNの判定
         endif
 
@@ -2118,7 +2180,7 @@ contains
         
         if (myrank == 0) then
             time0 = MPI_Wtime()
-            if (input_type < 2) time2 = int((time0-time1)*(Nstep-step)/step)
+            if (input_type /= 2) time2 = int((time0-time1)*(Nstep-step)/step)
             if (input_type == 2) time2 = int((time0-time1)*(2*Nstep-step)/step)
             hour = time2 / 3600
             min = mod(time2, 3600) / 60
@@ -2135,140 +2197,13 @@ contains
     end subroutine log_progress
 
 
-    subroutine all_time(U_procs, V_procs, W_procs, C_procs, step)
-        real(8), intent(in) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
-        real(8), intent(in) :: C_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1)
-        integer, intent(in) :: step
-        integer i, j, k
-        real(8) K_energy
-        real(8) trC_procs(1:NX, 1:NY, 1:N_procs)
-        real(8) Ep_procs(1:NX, 1:NY, 1:N_procs)
-        real(8) U_reg_procs(1:NX, 1:NY, 1:N_procs), V_reg_procs(1:NX, 1:NY, 1:N_procs), W_reg_procs(1:NX, 1:NY, 1:N_procs)
-        real(8) U_grad_procs(1:NX, 1:NY, 1:N_procs), V_grad_procs(1:NX, 1:NY, 1:N_procs), W_grad_procs(1:NX, 1:NY, 1:N_procs)
-        real(8) lambda, Re_lambda, lambda_epsilon
-        real(8) tmp, tmp_sum, D(3, 3), S(3, 3)
-        real(8) epsilon, L_kolmogorov, T_kolmogorov, U_kolmogorov
-        real(8) trC_tmp, trC_mean, trC_std
-        real(8) U_tmp, V_tmp, W_tmp
-        real(8) U_rms, V_rms, W_rms, U_all_rms
-        real(8) U_grad, V_grad, W_grad, U_all_grad
-        real(8) Ep_energy, Ep_energy_sum
-
-        ! 速度の2乗(空間平均は0になるはず)
-        do k = 1, N_procs  ! レギュラー格子に直して計算
-            do j = 1, NY
-                do i = 1, NX
-                    U_reg_procs(i, j, k) = (U_procs(i, j, k) + U_procs(i-1, j, k))*U_C/2.0d0
-                    V_reg_procs(i, j, k) = (V_procs(i, j, k) + V_procs(i, j-1, k))*U_C/2.0d0
-                    W_reg_procs(i, j, k) = (W_procs(i, j, k) + W_procs(i, j, k-1))*U_C/2.0d0
-                enddo
-            enddo
-        enddo
-        U_tmp = sum(U_reg_procs**2)/(NX*NY*NZ)
-        V_tmp = sum(V_reg_procs**2)/(NX*NY*NZ)
-        W_tmp = sum(W_reg_procs**2)/(NX*NY*NZ)
-        call MPI_Allreduce(U_tmp, U_rms, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-        call MPI_Allreduce(V_tmp, V_rms, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-        call MPI_Allreduce(W_tmp, W_rms, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-        U_all_rms = (U_rms + V_rms + W_rms)/3.0d0
-
-        ! 速度の微分の2乗
-        do k = 1, N_procs
-            do j = 1, NY
-                do i = 1, NX
-                    U_grad_procs(i, j, k) = (U_procs(i, j, k) - U_procs(i-1, j, k))*U_C/dX_C
-                    V_grad_procs(i, j, k) = (V_procs(i, j, k) - V_procs(i, j-1, k))*U_C/dY_C
-                    W_grad_procs(i, j, k) = (W_procs(i, j, k) - W_procs(i, j, k-1))*U_C/dZ_C
-                enddo
-            enddo
-        enddo
-        U_tmp = sum(U_grad_procs**2)/(NX*NY*NZ)
-        V_tmp = sum(V_grad_procs**2)/(NX*NY*NZ)
-        W_tmp = sum(W_grad_procs**2)/(NX*NY*NZ)
-        call MPI_Allreduce(U_tmp, U_grad, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-        call MPI_Allreduce(V_tmp, V_grad, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-        call MPI_Allreduce(W_tmp, W_grad, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-        U_all_grad = (U_grad + V_grad + W_grad)/3.0d0
-
-        ! エネルギー散逸率
-        tmp = 0.0d0
-        do k = 1, N_procs
-            do j = 1, NY
-                do i = 1, NX
-                    D(1, 1) = (U_procs(i, j, k) - U_procs(i-1, j, k))/dX
-                    D(1, 2) = (U_procs(i, j+1, k) - U_procs(i, j-1, k) + U_procs(i-1, j+1, k) - U_procs(i-1, j-1, k))/(4*dY)
-                    D(1, 3) = (U_procs(i, j, k+1) - U_procs(i, j, k-1) + U_procs(i-1, j, k+1) - U_procs(i-1, j, k-1))/(4*dZ)
-                    D(2, 1) = (V_procs(i+1, j, k) - V_procs(i-1, j, k) + V_procs(i+1, j-1, k) - V_procs(i-1, j-1, k))/(4*dX)
-                    D(2, 2) = (V_procs(i, j, k) - V_procs(i, j-1, k))/dY
-                    D(2, 3) = (V_procs(i, j, k+1) - V_procs(i, j, k-1) + V_procs(i, j-1, k+1) - V_procs(i, j-1, k-1))/(4*dZ)
-                    D(3, 1) = (W_procs(i+1, j, k) - W_procs(i-1, j, k) + W_procs(i+1, j, k-1) - W_procs(i-1, j, k-1))/(4*dX)
-                    D(3, 2) = (W_procs(i, j+1, k) - W_procs(i, j-1, k) + W_procs(i, j+1, k-1) - W_procs(i, j-1, k-1))/(4*dY)
-                    D(3, 3) = (W_procs(i, j, k) - W_procs(i, j, k-1))/dZ
-                    D(:, :) = D(:, :)*U_C/L_C
-                    S(1, 1) = (D(1, 1) + D(1, 1))
-                    S(1, 2) = (D(1, 2) + D(2, 1))
-                    S(1, 3) = (D(1, 3) + D(3, 1))
-                    S(2, 1) = (D(2, 1) + D(1, 2))
-                    S(2, 2) = (D(2, 2) + D(2, 2))
-                    S(2, 3) = (D(2, 3) + D(3, 2))
-                    S(3, 1) = (D(3, 1) + D(1, 3))
-                    S(3, 2) = (D(3, 2) + D(2, 3))
-                    S(3, 3) = (D(3, 3) + D(3, 3))
-                    tmp = tmp + sum(S**2)
-                enddo
-            enddo
-        enddo
-        call MPI_Allreduce(tmp, tmp_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-        epsilon = nu/2.0d0*tmp_sum/(NX*NY*NZ)
-
-        ! コルモゴロフ
-        L_kolmogorov = (nu**3/epsilon)**0.25d0  ! 最小スケールの渦長さ
-        T_kolmogorov = (nu/epsilon)**0.5d0  ! 最小スケールの渦時間
-        U_kolmogorov = (nu*epsilon)**0.25d0  ! 最小スケールの渦速度
-
-        ! テイラー長
-        lambda = sqrt(U_all_rms/U_all_grad)  ! テイラー長(定義方法は色々ある)
-        Re_lambda = sqrt(U_all_rms)*lambda/nu  ! テイラー長レイノルズ数
-        lambda_epsilon = 10*nu*U_all_rms/lambda**2/epsilon  ! テイラー長とエネルギー散逸率の関係(デバッグ用)(本当は15)
-
-        ! 運動エネルギー
-        K_energy = (U_rms + V_rms + W_rms)/2.0d0
-
-        ! 弾性エネルギー
-        do k = 1, N_procs
-            do j = 1, NY
-                do i = 1, NX
-                    Ep_procs(i, j, k) = 0.5d0*(1.0d0-beta)/Re/Wi*(Lp**2.0d0-3.0d0)*log(f(C_procs(:, i, j, k)))
-                enddo
-            enddo
-        enddo
-        Ep_energy = sum(Ep_procs(:, :, :))/(NX*NY*NZ)
-        call MPI_Allreduce(Ep_energy, Ep_energy_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-
-        ! 伸長長さ
-        trC_procs(:, :, :) = C_procs(1, 1:NX, 1:NY, 1:N_procs)+C_procs(4, 1:NX, 1:NY, 1:N_procs)+C_procs(6, 1:NX, 1:NY, 1:N_procs)
-        trC_tmp = sum(trC_procs)/(NX*NY*NZ)
-        call MPI_Allreduce(trC_tmp, trC_mean, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-        trC_tmp = sum((trC_procs - trC_mean)**2)/(NX*NY*NZ)
-        call MPI_Allreduce(trC_tmp, trC_std, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-        trC_std = sqrt(trC_std)
-        
-        ! 時系列データの保存
-        if (myrank == 0) then
-            open(30, file = trim(output_dir)//'all_time.d', position='append')  ! stepとlambda追加
-            write(30, *) step, step*dt_C, K_energy, lambda, Re_lambda, epsilon, L_kolmogorov, T_kolmogorov, U_kolmogorov, &
-                            Ep_energy_sum, trC_mean, trC_std
-            close(30)
-        endif
-    end subroutine all_time
-
     subroutine all_time_dif(U_procs, V_procs, W_procs, U_ave_procs, V_ave_procs, W_ave_procs, C_procs, step)
         real(8), intent(in) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
         real(8), intent(in) :: U_ave_procs(1:NX, 1:NY, 1:N_procs), V_ave_procs(1:NX, 1:NY, 1:N_procs), W_ave_procs(1:NX, 1:NY, 1:N_procs)
         real(8), intent(in) :: C_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1)
         integer, intent(in) :: step
         integer i, j, k
-        real(8) K_energy
+        real(8) K_energy, K_staggered
         real(8) trC_procs(1:NX, 1:NY, 1:N_procs)
         real(8) Ep_procs(1:NX, 1:NY, 1:N_procs)
         real(8) U_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
@@ -2277,11 +2212,14 @@ contains
         real(8) lambda, Re_lambda, lambda_epsilon
         real(8) tmp, tmp_sum, D(3, 3), S(3, 3)
         real(8) epsilon, L_kolmogorov, T_kolmogorov, U_kolmogorov
-        real(8) trC_tmp, trC_mean, trC_std
+        real(8) trC_mean, trC_std
         real(8) U_tmp, V_tmp, W_tmp
         real(8) U_rms, V_rms, W_rms, U_all_rms
         real(8) U_grad, V_grad, W_grad, U_all_grad
-        real(8) Ep_energy, Ep_energy_sum
+        real(8) Ep_energy
+        character(32) key
+        if (sum(U_ave_procs**2) < 1.0d-10) key = 'same'  ! 平均を引かない
+        if (sum(U_ave_procs**2) > 1.0d-10) key = 'diff'  ! 平均を引く
         
         ! 変動速度
         U_dif_procs(1:NX, 1:NY, 1:N_procs) = (U_procs(1:NX, 1:NY, 1:N_procs) - U_ave_procs(:, :, :)) * U_C
@@ -2310,7 +2248,6 @@ contains
         call MPI_Allreduce(U_tmp, U_rms, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
         call MPI_Allreduce(V_tmp, V_rms, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
         call MPI_Allreduce(W_tmp, W_rms, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-        U_all_rms = (U_rms + V_rms + W_rms)/3.0d0
 
         ! 変動速度の微分の2乗
         do k = 1, N_procs
@@ -2328,7 +2265,6 @@ contains
         call MPI_Allreduce(U_tmp, U_grad, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
         call MPI_Allreduce(V_tmp, V_grad, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
         call MPI_Allreduce(W_tmp, W_grad, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-        U_all_grad = (U_grad + V_grad + W_grad)/3.0d0
 
         ! エネルギー散逸率
         tmp = 0.0d0
@@ -2359,6 +2295,10 @@ contains
             enddo
         enddo
         call MPI_Allreduce(tmp, tmp_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+
+        ! エネルギー散逸率
+        U_all_rms = (U_rms + V_rms + W_rms)/3.0d0
+        U_all_grad = (U_grad + V_grad + W_grad)/3.0d0
         epsilon = nu/2.0d0*tmp_sum/(NX*NY*NZ)
 
         ! コルモゴロフ
@@ -2373,6 +2313,10 @@ contains
 
         ! 変動速度の運動エネルギー
         K_energy = (U_rms + V_rms + W_rms)/2.0d0
+        ! スタガード格子で計算
+        tmp = sum(U_procs(1:NX, 1:NY, 1:N_procs)**2) + sum(V_procs(1:NX, 1:NY, 1:N_procs)**2) + sum(W_procs(1:NX, 1:NY, 1:N_procs)**2)
+        tmp = tmp*U_C**2/(2.0d0*NX*NY*NZ)
+        call MPI_Allreduce(tmp, K_staggered, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
         ! 弾性エネルギー
         do k = 1, N_procs
@@ -2382,152 +2326,262 @@ contains
                 enddo
             enddo
         enddo
-        Ep_energy = sum(Ep_procs(:, :, :))/(NX*NY*NZ)
-        call MPI_Allreduce(Ep_energy, Ep_energy_sum, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        tmp = sum(Ep_procs(:, :, :))/(NX*NY*NZ)
+        call MPI_Allreduce(tmp, Ep_energy, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
         ! 伸長長さ
         trC_procs(:, :, :) = C_procs(1, 1:NX, 1:NY, 1:N_procs)+C_procs(4, 1:NX, 1:NY, 1:N_procs)+C_procs(6, 1:NX, 1:NY, 1:N_procs)
-        trC_tmp = sum(trC_procs)/(NX*NY*NZ)
-        call MPI_Allreduce(trC_tmp, trC_mean, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-        trC_tmp = sum((trC_procs - trC_mean)**2)/(NX*NY*NZ)
-        call MPI_Allreduce(trC_tmp, trC_std, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        tmp = sum(trC_procs)/(NX*NY*NZ)
+        call MPI_Allreduce(tmp, trC_mean, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        tmp = sum((trC_procs - trC_mean)**2)/(NX*NY*NZ)
+        call MPI_Allreduce(tmp, trC_std, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
         trC_std = sqrt(trC_std)
         
         ! 時系列データの保存
         if (myrank == 0) then
-            open(30, file = trim(output_dir)//'all_time_dif.d', position='append')  ! stepとlambda追加
-            write(30, *) step, step*dt_C, K_energy, lambda, Re_lambda, epsilon, L_kolmogorov, T_kolmogorov, U_kolmogorov, &
-                            Ep_energy_sum, trC_mean, trC_std
+            open(30, file = trim(output_dir)//'Log/time_'//trim(key)//'.d', position='append')
+            write(30, *) step, step*dt_C, K_energy, K_staggered, lambda, Re_lambda, epsilon, L_kolmogorov, T_kolmogorov, U_kolmogorov, &
+                            Ep_energy, trC_mean, trC_std
             close(30)
         endif
 
     end subroutine all_time_dif
 
-    
-    subroutine fft_energy(U_procs, V_procs, W_procs, step)
+    subroutine all_time_dif_map(U_procs, V_procs, W_procs, U_ave_procs, V_ave_procs, W_ave_procs, C_procs, step)
         real(8), intent(in) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
-        integer, intent(in) ::  step
-        complex(8), allocatable :: U_hat_hat_procs(:, :, :), V_hat_hat_procs(:, :, :), W_hat_hat_procs(:, :, :)
-        real(8), allocatable :: E_tmp_procs(:, :, :)
-        real(8), allocatable :: K_abs_procs(:, :, :)
+        real(8), intent(in) :: U_ave_procs(1:NX, 1:NY, 1:N_procs), V_ave_procs(1:NX, 1:NY, 1:N_procs), W_ave_procs(1:NX, 1:NY, 1:N_procs)
+        real(8), intent(in) :: C_procs(6, 0:NX+1, 0:NY+1, 0:N_procs+1)
+        integer, intent(in) :: step
+        integer i, j, k
+        real(8) trC_procs(1:NX, 1:NY, 1:N_procs)
+        real(8) Ep_procs(1:NX, 1:NY, 1:N_procs)
+        real(8) U_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
         real(8) U_reg_procs(1:NX, 1:NY, 1:N_procs), V_reg_procs(1:NX, 1:NY, 1:N_procs), W_reg_procs(1:NX, 1:NY, 1:N_procs)
-        real(8) Energy_procs(0:NX), Energy_procs_sum(0:NX)
-        integer i, j, k, index
-        real(8) kx, ky, kz
-        integer NY_procs
+        real(8) U_grad_procs(1:NX, 1:NY, 1:N_procs), V_grad_procs(1:NX, 1:NY, 1:N_procs), W_grad_procs(1:NX, 1:NY, 1:N_procs)
+        real(8) D(3, 3), S(3, 3)
+        real(8) K_energy
+        real(8) epsilon, L_kolmogorov, T_kolmogorov, U_kolmogorov
+        real(8) lambda, Re_lambda, lambda_epsilon
+        real(8) trC_mean, trC_std
+        real(8) Ep_energy
+        ! mapの定義
+        real(8) K_energy_map(1:NX, 1:NY)
+        real(8) tmp_map(1:NX, 1:NY), tmp_sum_map(1:NX, 1:NY)
+        real(8) epsilon_map(1:NX, 1:NY), L_kolmogorov_map(1:NX, 1:NY), T_kolmogorov_map(1:NX, 1:NY), U_kolmogorov_map(1:NX, 1:NY)
+        real(8) lambda_map(1:NX, 1:NY), Re_lambda_map(1:NX, 1:NY), lambda_epsilon_map(1:NX, 1:NY)
+        real(8) U_tmp_map(1:NX, 1:NY), V_tmp_map(1:NX, 1:NY), W_tmp_map(1:NX, 1:NY)
+        real(8) U_rms_map(1:NX, 1:NY), V_rms_map(1:NX, 1:NY), W_rms_map(1:NX, 1:NY), U_all_rms_map(1:NX, 1:NY)
+        real(8) U_grad_map(1:NX, 1:NY), V_grad_map(1:NX, 1:NY), W_grad_map(1:NX, 1:NY), U_all_grad_map(1:NX, 1:NY)
+        real(8) trC_mean_map(1:NX, 1:NY), trC_std_map(1:NX, 1:NY)
+        real(8) Ep_energy_map(1:NX, 1:NY)
+        real(8) mask_map(1:NX, 1:NY)
         character(8) str
-        write(str, '(I8.8)') step
-        NY_procs = NY / procs
+        character(32) key
+        if (sum(U_ave_procs**2) < 1.0d-10) key = 'same'  ! 平均を引かない
+        if (sum(U_ave_procs**2) > 1.0d-10) key = 'diff'  ! 平均を引く
+        
+        ! 変動速度
+        U_dif_procs(1:NX, 1:NY, 1:N_procs) = (U_procs(1:NX, 1:NY, 1:N_procs) - U_ave_procs(:, :, :)) * U_C
+        V_dif_procs(1:NX, 1:NY, 1:N_procs) = (V_procs(1:NX, 1:NY, 1:N_procs) - V_ave_procs(:, :, :)) * U_C
+        W_dif_procs(1:NX, 1:NY, 1:N_procs) = (W_procs(1:NX, 1:NY, 1:N_procs) - W_ave_procs(:, :, :)) * U_C
+        call MPI_Boundary(U_dif_procs)
+        call MPI_Boundary(V_dif_procs)
+        call MPI_Boundary(W_dif_procs)
+        call PBM(U_dif_procs)
+        call PBM(V_dif_procs)
+        call PBM(W_dif_procs)
 
-        ! allocate(U_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))  ! subroutineでallocateするのでここでは不要
-        ! allocate(V_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
-        ! allocate(W_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
-        allocate(E_tmp_procs(1:NX/2+1, 1:NY_procs, 1:NZ), K_abs_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
+        ! 変動速度の2乗
+        do k = 1, N_procs  ! レギュラー格子に直して計算
+            do j = 1, NY
+                do i = 1, NX
+                    U_reg_procs(i, j, k) = (U_dif_procs(i, j, k) + U_dif_procs(i-1, j, k))/2.0d0
+                    V_reg_procs(i, j, k) = (V_dif_procs(i, j, k) + V_dif_procs(i, j-1, k))/2.0d0
+                    W_reg_procs(i, j, k) = (W_dif_procs(i, j, k) + W_dif_procs(i, j, k-1))/2.0d0
+                enddo
+            enddo
+        enddo
+        do j = 1, NY
+            do i = 1, NX
+                U_tmp_map(i, j) = sum(U_reg_procs(i, j, :)**2)/NZ
+                V_tmp_map(i, j) = sum(V_reg_procs(i, j, :)**2)/NZ
+                W_tmp_map(i, j) = sum(W_reg_procs(i, j, :)**2)/NZ
+            enddo
+        enddo
+        call MPI_Allreduce(U_tmp_map, U_rms_map, NX*NY, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        call MPI_Allreduce(V_tmp_map, V_rms_map, NX*NY, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        call MPI_Allreduce(W_tmp_map, W_rms_map, NX*NY, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
-        ! レギュラー格子での速度
+        ! 変動速度の微分の2乗
         do k = 1, N_procs
             do j = 1, NY
                 do i = 1, NX
-                    U_reg_procs(i, j, k) = (U_procs(i, j, k) + U_procs(i-1, j, k))*U_C/2.0d0
-                    V_reg_procs(i, j, k) = (V_procs(i, j, k) + V_procs(i, j-1, k))*U_C/2.0d0
-                    W_reg_procs(i, j, k) = (W_procs(i, j, k) + W_procs(i, j, k-1))*U_C/2.0d0
+                    U_grad_procs(i, j, k) = (U_dif_procs(i, j, k) - U_dif_procs(i-1, j, k))/dX_C
+                    V_grad_procs(i, j, k) = (V_dif_procs(i, j, k) - V_dif_procs(i, j-1, k))/dY_C
+                    W_grad_procs(i, j, k) = (W_dif_procs(i, j, k) - W_dif_procs(i, j, k-1))/dZ_C
                 enddo
             enddo
         enddo
+        do j = 1, NY
+            do i = 1, NX
+                U_tmp_map(i, j) = sum(U_grad_procs(i, j, :)**2)/NZ
+                V_tmp_map(i, j) = sum(V_grad_procs(i, j, :)**2)/NZ
+                W_tmp_map(i, j) = sum(W_grad_procs(i, j, :)**2)/NZ
+            enddo
+        enddo
+        call MPI_Allreduce(U_tmp_map, U_grad_map, NX*NY, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        call MPI_Allreduce(V_tmp_map, V_grad_map, NX*NY, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        call MPI_Allreduce(W_tmp_map, W_grad_map, NX*NY, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
-        ! 速度場をフーリエ変換
-        ! そのままの値を用いる場合
-        ! call fft_forward(U_procs(1:NX, 1:NY, 1:N_procs)*U_C, U_hat_hat_procs)
-        ! call fft_forward(V_procs(1:NX, 1:NY, 1:N_procs)*U_C, V_hat_hat_procs)
-        ! call fft_forward(W_procs(1:NX, 1:NY, 1:N_procs)*U_C, W_hat_hat_procs)
-        ! レギュラー格子での変動速度を用いる場合
-        call fft_forward(U_reg_procs(1:NX, 1:NY, 1:N_procs), U_hat_hat_procs)
-        call fft_forward(V_reg_procs(1:NX, 1:NY, 1:N_procs), V_hat_hat_procs)
-        call fft_forward(W_reg_procs(1:NX, 1:NY, 1:N_procs), W_hat_hat_procs)
-
-        ! 配列要素に対するエネルギー
-        do k = 1, NZ
-            do j = 1, NY_procs
-                do i = 1, NX/2+1
-                    E_tmp_procs(i, j, k) = abs(U_hat_hat_procs(i, j, k))**2.0d0 &
-                                         + abs(V_hat_hat_procs(i, j, k))**2.0d0 &
-                                         + abs(W_hat_hat_procs(i, j, k))**2.0d0
+        ! エネルギー散逸率
+        tmp_map(:, :) = 0.0d0
+        do k = 1, N_procs  ! 変動速度で計算
+            do j = 1, NY
+                do i = 1, NX
+                    D(1, 1) = (U_dif_procs(i, j, k) - U_dif_procs(i-1, j, k))/dX
+                    D(1, 2) = (U_dif_procs(i, j+1, k) - U_dif_procs(i, j-1, k) + U_dif_procs(i-1, j+1, k) - U_dif_procs(i-1, j-1, k))/(4*dY)
+                    D(1, 3) = (U_dif_procs(i, j, k+1) - U_dif_procs(i, j, k-1) + U_dif_procs(i-1, j, k+1) - U_dif_procs(i-1, j, k-1))/(4*dZ)
+                    D(2, 1) = (V_dif_procs(i+1, j, k) - V_dif_procs(i-1, j, k) + V_dif_procs(i+1, j-1, k) - V_dif_procs(i-1, j-1, k))/(4*dX)
+                    D(2, 2) = (V_dif_procs(i, j, k) - V_dif_procs(i, j-1, k))/dY
+                    D(2, 3) = (V_dif_procs(i, j, k+1) - V_dif_procs(i, j, k-1) + V_dif_procs(i, j-1, k+1) - V_dif_procs(i, j-1, k-1))/(4*dZ)
+                    D(3, 1) = (W_dif_procs(i+1, j, k) - W_dif_procs(i-1, j, k) + W_dif_procs(i+1, j, k-1) - W_dif_procs(i-1, j, k-1))/(4*dX)
+                    D(3, 2) = (W_dif_procs(i, j+1, k) - W_dif_procs(i, j-1, k) + W_dif_procs(i, j+1, k-1) - W_dif_procs(i, j-1, k-1))/(4*dY)
+                    D(3, 3) = (W_dif_procs(i, j, k) - W_dif_procs(i, j, k-1))/dZ
+                    D(:, :) = D(:, :)/L_C
+                    S(1, 1) = (D(1, 1) + D(1, 1))
+                    S(1, 2) = (D(1, 2) + D(2, 1))
+                    S(1, 3) = (D(1, 3) + D(3, 1))
+                    S(2, 1) = (D(2, 1) + D(1, 2))
+                    S(2, 2) = (D(2, 2) + D(2, 2))
+                    S(2, 3) = (D(2, 3) + D(3, 2))
+                    S(3, 1) = (D(3, 1) + D(1, 3))
+                    S(3, 2) = (D(3, 2) + D(2, 3))
+                    S(3, 3) = (D(3, 3) + D(3, 3))
+                    tmp_map(i, j) = tmp_map(i, j) + sum(S**2)
                 enddo
             enddo
         enddo
+        call MPI_Allreduce(tmp_map, tmp_sum_map, NX*NY, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
-        ! 配列要素に対する波数
-        do k = 1, NZ
-            do j = 1, NY_procs
-                do i = 1, NX/2+1
-                    kx = sign(1.0d0, dble(NX + 3)/2.0d0 - dble(i)) * (- dble(abs(NX/2 + 1 - i)) + dble(NX)/2.0d0)  ! 増田さん参考
-                    ky = sign(1.0d0, dble(NY + 3)/2.0d0 - dble(myrank*NY_procs + j)) * (- dble(abs(NY/2 + 1 - myrank*NY_procs - j)) + dble(NY)/2.0d0)
-                    kz = sign(1.0d0, dble(NZ + 3)/2.0d0 - dble(k)) * (- dble(abs(NZ/2 + 1 - k)) + dble(NZ)/2.0d0)
-                    K_abs_procs(i, j, k) = sqrt(kx**2.0d0 + ky**2.0d0 + kz**2.0d0)
-                enddo
+        do j = 1, NY
+            do i = 1, NX
+                ! エネルギー散逸率
+                U_all_rms_map(i, j) = (U_rms_map(i, j) + V_rms_map(i, j) + W_rms_map(i, j))/3.0d0
+                U_all_grad_map(i, j) = (U_grad_map(i, j) + V_grad_map(i, j) + W_grad_map(i, j))/3.0d0
+                epsilon_map(i, j) = nu/2.0d0*tmp_sum_map(i, j)/NZ
+
+                ! コルモゴロフ
+                L_kolmogorov_map(i, j) = (nu**3/epsilon_map(i, j))**0.25d0  ! 最小スケールの渦長さ
+                T_kolmogorov_map(i, j) = (nu/epsilon_map(i, j))**0.5d0  ! 最小スケールの渦時間
+                U_kolmogorov_map(i, j) = (nu*epsilon_map(i, j))**0.25d0  ! 最小スケールの渦速度
+
+                ! テイラー長
+                lambda_map(i, j) = sqrt(U_all_rms_map(i, j)/U_all_grad_map(i, j))  ! テイラー長(定義方法は色々ある)
+                Re_lambda_map(i, j) = sqrt(U_all_rms_map(i, j))*lambda_map(i, j)/nu  ! テイラー長レイノルズ数
+                lambda_epsilon_map(i, j) = 10*nu*U_all_rms_map(i, j)/lambda_map(i, j)**2/epsilon_map(i, j) ! テイラー長とエネルギー散逸率の関係(デバッグ用)(本当は15)
+
+                ! 変動速度の運動エネルギー
+                K_energy_map(i, j) = (U_rms_map(i, j) + V_rms_map(i, j) + W_rms_map(i, j))/2.0d0
             enddo
         enddo
 
-        ! 波数を四捨五入し、対応する整数の波数にエネルギーを足し合わせる
-        Energy_procs(:) = 0.0d0
-        do k = 1, NZ
-            do j = 1, NY_procs
-                do i = 1, NX/2+1
-                    index = nint(K_abs_procs(i, j, k))
-                    if (i==1 .or. i==NX/2+1) then
-                        Energy_procs(index) = Energy_procs(index) + E_tmp_procs(i, j, k)/2.0d0
-                    else
-                        Energy_procs(index) = Energy_procs(index) + E_tmp_procs(i, j, k)/2.0d0*2.0d0
-                    endif
+        ! 弾性エネルギー
+        do k = 1, N_procs
+            do j = 1, NY
+                do i = 1, NX
+                    Ep_procs(i, j, k) = 0.5d0*(1.0d0-beta)/Re/Wi*(Lp**2.0d0-3.0d0)*log(f(C_procs(:, i, j, k)))
                 enddo
             enddo
         enddo
+        do j = 1, NY
+            do i = 1, NX
+                tmp_map(i, j) = sum(Ep_procs(i, j, :))/NZ
+            enddo
+        enddo
+        call MPI_Allreduce(tmp_map, Ep_energy_map, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
 
-        call MPI_Allreduce(Energy_procs(0), Energy_procs_sum(0), (NX+1), MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        ! 伸長長さ
+        trC_procs(:, :, :) = C_procs(1, 1:NX, 1:NY, 1:N_procs)+C_procs(4, 1:NX, 1:NY, 1:N_procs)+C_procs(6, 1:NX, 1:NY, 1:N_procs)
+        do j = 1, NY
+            do i = 1, NX
+                tmp_map(i, j) = sum(trC_procs(i, j, :))/NZ
+            enddo
+        enddo
+        call MPI_Allreduce(tmp_map, trC_mean_map, NX*NY, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        do j = 1, NY
+            do i = 1, NX
+                tmp_map(i, j) = sum((trC_procs(i, j, :) - trC_mean_map(i, j))**2)/NZ  ! z方向の分散
+            enddo
+        enddo
+        call MPI_Allreduce(tmp_map, trC_std_map, NX*NY, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        trC_std_map = sqrt(trC_std_map)
+
+        ! マスクする場所
+        mask_map(:, :) = 1.0d0
+        do j = 1, NY
+            do i = 1, NX
+                if (((i-0.5d0)*dX - 2*PI  /4)**2 + ((j-0.5d0)*dX - 2*PI  /4)**2 < (DC*1.5d0/2.0d0)**2) mask_map(i, j) = 0.0d0 ! 円柱半径の1.5倍
+                if (((i-0.5d0)*dX - 2*PI*3/4)**2 + ((j-0.5d0)*dX - 2*PI  /4)**2 < (DC*1.5d0/2.0d0)**2) mask_map(i, j) = 0.0d0
+                if (((i-0.5d0)*dX - 2*PI  /4)**2 + ((j-0.5d0)*dX - 2*PI*3/4)**2 < (DC*1.5d0/2.0d0)**2) mask_map(i, j) = 0.0d0
+                if (((i-0.5d0)*dX - 2*PI*3/4)**2 + ((j-0.5d0)*dX - 2*PI*3/4)**2 < (DC*1.5d0/2.0d0)**2) mask_map(i, j) = 0.0d0
+            enddo
+        enddo
+        ! マスク後の値
+        K_energy = sum(K_energy_map*mask_map)/sum(mask_map)
+        lambda = sum(lambda_map*mask_map)/sum(mask_map)
+        Re_lambda = sum(Re_lambda_map*mask_map)/sum(mask_map)
+        epsilon = sum(epsilon_map*mask_map)/sum(mask_map)
+        lambda_epsilon = sum(lambda_epsilon_map*mask_map)/sum(mask_map)
+        L_kolmogorov = sum(L_kolmogorov_map*mask_map)/sum(mask_map)
+        T_kolmogorov = sum(T_kolmogorov_map*mask_map)/sum(mask_map)
+        U_kolmogorov = sum(U_kolmogorov_map*mask_map)/sum(mask_map)
+        Ep_energy = sum(Ep_energy_map*mask_map)/sum(mask_map)
+        trC_mean = sum(trC_mean_map*mask_map)/sum(mask_map)
+        trC_std = sum(trC_std_map*mask_map)/sum(mask_map)
+
+        ! Gstepごとにmapとして保存
+        if (myrank == 0 .and. mod(step, Gstep)==0) then
+            write(str, '(I8.8)') step
+            open(10, file=trim(output_dir)//'Map/'//trim(key)//'_'//str//'.bin', form='unformatted', status='replace', access='stream')
+            do j = 1, NY
+                do i = 1, NX
+                    write(10) (i-0.5d0)*dX_C, (j-0.5d0)*dY_C, K_energy_map(i, j), lambda_map(i, j), Re_lambda_map(i, j), epsilon_map(i, j), &
+                              L_kolmogorov_map(i, j), T_kolmogorov_map(i, j), U_kolmogorov_map(i, j), &
+                              Ep_energy_map(i, j), trC_mean_map(i, j), trC_std_map(i, j), mask_map(i, j), 0.0d0, 0.0d0, 0.0d0, 0.0d0, 0.0d0
+                enddo
+            enddo
+            close(10)
+        endif
         
-        Energy(:) = Energy(:) + Energy_procs_sum(:)
-        Energy(NX) = Energy(NX) + 1.0d0  ! 計算回数を保存
-
-        if (mod(step, Gstep) == 0) then
-            Energy(:) = Energy(:)/Energy(NX)
-
-            if (myrank == 0) then
-                call mk_dir(trim(output_dir)//'Energy/')
-                open(30, file = trim(output_dir)//'Energy/'//'energy_'//str//'.d', status='replace')
-                do i = 0, NX-1
-                    write(30, '(I4, e12.4)') i, Energy(i)
-                enddo
-                close(30)
-            endif
-
-            Energy(:) = 0.0d0
+        ! 時系列データの保存  ! MapからK_staggeredは計算出来ない？出来てもする必要ないか
+        if (myrank == 0) then
+            open(30, file = trim(output_dir)//'Log/time_'//trim(key)//'_mask.d', position='append')
+            write(30, *) step, step*dt_C, K_energy, 0.0d0, lambda, Re_lambda, epsilon, L_kolmogorov, T_kolmogorov, U_kolmogorov, &
+                            Ep_energy, trC_mean, trC_std
+            close(30)
         endif
 
-        deallocate(E_tmp_procs, K_abs_procs)
-    end subroutine fft_energy
+    end subroutine all_time_dif_map
 
 
-    subroutine fft_energy_dif(U_procs, V_procs, W_procs, U_ave_procs, V_ave_procs, W_ave_procs, step)
+    subroutine fft_energy_dif(U_procs, V_procs, W_procs, U_ave_procs, V_ave_procs, W_ave_procs, Energy, step)
         real(8), intent(in) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
         real(8), intent(in) :: U_ave_procs(1:NX, 1:NY, 1:N_procs), V_ave_procs(1:NX, 1:NY, 1:N_procs), W_ave_procs(1:NX, 1:NY, 1:N_procs)
         integer, intent(in) :: step
+        real(8), intent(inout) :: Energy(0:NX)
         real(8) U_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
         real(8) U_reg_procs(1:NX, 1:NY, 1:N_procs), V_reg_procs(1:NX, 1:NY, 1:N_procs), W_reg_procs(1:NX, 1:NY, 1:N_procs)
-        complex(8), allocatable :: U_hat_hat_procs(:, :, :), V_hat_hat_procs(:, :, :), W_hat_hat_procs(:, :, :)
-        real(8), allocatable :: E_tmp_procs(:, :, :)
-        real(8), allocatable :: K_abs_procs(:, :, :)
-        real(8) Energy_procs(0:NX), Energy_procs_sum(0:NX)
+        complex(8) U_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ), V_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ), W_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ)
+        real(8) E_tmp_procs(1:NX/2+1, 1:NY_procs, 1:NZ), K_abs_procs(1:NX/2+1, 1:NY_procs, 1:NZ)
+        real(8) Energy_procs(0:NX), Energy_sum(0:NX)
         integer i, j, k, index
         real(8) kx, ky, kz
-        integer NY_procs
         character(8) str
+        character(32) key
+        
         write(str, '(I8.8)') step
-        NY_procs = NY / procs
-
-        ! allocate(U_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))  ! subroutineでallocateするのでここでは不要
-        ! allocate(V_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
-        ! allocate(W_hat_hat_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
-        allocate(E_tmp_procs(1:NX/2+1, 1:NY_procs, 1:NZ), K_abs_procs(1:NX/2+1, 1:NY_procs, 1:NZ))
+        if (sum(U_ave_procs**2) < 1.0d-10) key = 'same'  ! 平均を引かない
+        if (sum(U_ave_procs**2) > 1.0d-10) key = 'diff'  ! 平均を引く
 
         ! 変動速度
         U_dif_procs(1:NX, 1:NY, 1:N_procs) = (U_procs(1:NX, 1:NY, 1:N_procs) - U_ave_procs(:, :, :)) * U_C
@@ -2551,16 +2605,7 @@ contains
             enddo
         enddo
 
-        ! 速度場をフーリエ変換
-        ! そのままの値を用いる場合
-        ! call fft_forward(U_procs(1:NX, 1:NY, 1:N_procs)*U_C, U_hat_hat_procs)
-        ! call fft_forward(V_procs(1:NX, 1:NY, 1:N_procs)*U_C, V_hat_hat_procs)
-        ! call fft_forward(W_procs(1:NX, 1:NY, 1:N_procs)*U_C, W_hat_hat_procs)
-        ! 変動成分を用いる場合
-        ! call fft_forward(U_dif_procs(1:NX, 1:NY, 1:N_procs)*U_C, U_hat_hat_procs)
-        ! call fft_forward(V_dif_procs(1:NX, 1:NY, 1:N_procs)*U_C, V_hat_hat_procs)
-        ! call fft_forward(W_dif_procs(1:NX, 1:NY, 1:N_procs)*U_C, W_hat_hat_procs)
-        ! レギュラー格子での変動速度を用いる場合
+        ! 速度場をフーリエ変換  ! レギュラー格子での変動速度を用いる場合
         call fft_forward(U_reg_procs(1:NX, 1:NY, 1:N_procs), U_hat_hat_procs)
         call fft_forward(V_reg_procs(1:NX, 1:NY, 1:N_procs), V_hat_hat_procs)
         call fft_forward(W_reg_procs(1:NX, 1:NY, 1:N_procs), W_hat_hat_procs)
@@ -2602,18 +2647,16 @@ contains
                 enddo
             enddo
         enddo
-        call MPI_Allreduce(Energy_procs(0), Energy_procs_sum(0), (NX+1), MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
-        Energy(:) = Energy(:) + Energy_procs_sum(:)
-        Energy(NX) = Energy(NX) + 1.0d0  ! 計算回数を保存
+        call MPI_Allreduce(Energy_procs(0), Energy_sum(0), (NX+1), MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        Energy(:) = Energy(:) + Energy_sum(:)
 
         if (mod(step, Gstep) == 0) then
-            Energy(:) = Energy(:)/Energy(NX)
+            Energy(:) = Energy(:)/(dble(Gstep)/dble(Tstep))  ! 今までに足してきた回数で割る
 
             if (myrank == 0) then
-                call mk_dir(trim(output_dir)//'Energy/')
-                open(30, file = trim(output_dir)//'Energy/'//'energy_dif_'//str//'.d', status='replace')
+                open(30, file = trim(output_dir)//'Log/energy_'//trim(key)//'_'//str//'.d', status='replace')
                 do i = 0, NX-1
-                    write(30, '(I4, e12.4)') i, Energy(i)
+                    write(30, *) i, Energy(i)
                 enddo
                 close(30)
             endif
@@ -2621,9 +2664,202 @@ contains
             Energy(:) = 0.0d0
         endif
 
-
-        deallocate(E_tmp_procs, K_abs_procs)
     end subroutine fft_energy_dif
+
+
+    subroutine fft_energy_dif_map(U_procs, V_procs, W_procs, U_ave_procs, V_ave_procs, W_ave_procs, Energy_map_procs, step)
+        real(8), intent(in) :: U_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
+        real(8), intent(in) :: U_ave_procs(1:NX, 1:NY, 1:N_procs), V_ave_procs(1:NX, 1:NY, 1:N_procs), W_ave_procs(1:NX, 1:NY, 1:N_procs)
+        integer, intent(in) :: step
+        real(8), intent(inout) :: Energy_map_procs(1:NX, 1:NY_procs, 0:NZ)
+        real(8) U_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1), V_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1), W_dif_procs(0:NX+1, 0:NY+1, 0:N_procs+1)
+        real(8) U_reg_procs(1:NX, 1:NY, 1:N_procs), V_reg_procs(1:NX, 1:NY, 1:N_procs), W_reg_procs(1:NX, 1:NY, 1:N_procs)
+        complex(8) U_hat_procs(1:NX, 1:NY_procs, 1:NZ), V_hat_procs(1:NX, 1:NY_procs, 1:NZ), W_hat_procs(1:NX, 1:NY_procs, 1:NZ)
+        real(8) E_tmp_procs(1:NX, 1:NY_procs, 1:NZ), K_abs_procs(1:NX, 1:NY_procs, 1:NZ)
+        real(8) Energy_procs(1:NX, 1:NY_procs, 0:NZ)
+        real(8) mask_map_procs(1:NX, 1:NY_procs)
+        real(8) Energy_tmp(0:NZ), Energy(0:NZ)
+        integer i, j, k, index
+        ! real(8) kx, ky, kz  ! デバッグ用
+        character(8) str
+        character(32) key
+        write(str, '(I8.8)') step
+        if (sum(U_ave_procs**2) < 1.0d-10) key = 'same'  ! 平均を引かない
+        if (sum(U_ave_procs**2) > 1.0d-10) key = 'diff'  ! 平均を引く
+
+        ! 変動速度
+        U_dif_procs(1:NX, 1:NY, 1:N_procs) = (U_procs(1:NX, 1:NY, 1:N_procs) - U_ave_procs(:, :, :)) * U_C
+        V_dif_procs(1:NX, 1:NY, 1:N_procs) = (V_procs(1:NX, 1:NY, 1:N_procs) - V_ave_procs(:, :, :)) * U_C
+        W_dif_procs(1:NX, 1:NY, 1:N_procs) = (W_procs(1:NX, 1:NY, 1:N_procs) - W_ave_procs(:, :, :)) * U_C
+        call MPI_Boundary(U_dif_procs)
+        call MPI_Boundary(V_dif_procs)
+        call MPI_Boundary(W_dif_procs)
+        call PBM(U_dif_procs)
+        call PBM(V_dif_procs)
+        call PBM(W_dif_procs)
+
+        ! レギュラー格子での速度
+        do k = 1, N_procs
+            do j = 1, NY
+                do i = 1, NX
+                    U_reg_procs(i, j, k) = (U_dif_procs(i, j, k) + U_dif_procs(i-1, j, k))/2.0d0
+                    V_reg_procs(i, j, k) = (V_dif_procs(i, j, k) + V_dif_procs(i, j-1, k))/2.0d0
+                    W_reg_procs(i, j, k) = (W_dif_procs(i, j, k) + W_dif_procs(i, j, k-1))/2.0d0
+                enddo
+            enddo
+        enddo
+
+        ! 速度場をフーリエ変換  ! レギュラー格子での変動速度を用いる場合
+        call fft_z(U_reg_procs(1:NX, 1:NY, 1:N_procs), U_hat_procs)
+        call fft_z(V_reg_procs(1:NX, 1:NY, 1:N_procs), V_hat_procs)
+        call fft_z(W_reg_procs(1:NX, 1:NY, 1:N_procs), W_hat_procs)
+
+        ! 配列要素に対するエネルギー
+        do k = 1, NZ
+            do j = 1, NY_procs
+                do i = 1, NX
+                    E_tmp_procs(i, j, k) = abs(U_hat_procs(i, j, k))**2.0d0 &
+                                         + abs(V_hat_procs(i, j, k))**2.0d0 &
+                                         + abs(W_hat_procs(i, j, k))**2.0d0
+                enddo
+            enddo
+        enddo
+
+        ! 配列要素に対する波数
+        do k = 1, NZ
+            K_abs_procs(:, :, k) = sign(1.0d0, dble(NZ + 3)/2.0d0 - dble(k)) * (- dble(abs(NZ/2 + 1 - k)) + dble(NZ)/2.0d0)
+        enddo
+
+        ! 波数を四捨五入し、対応する整数の波数にエネルギーを足し合わせる
+        Energy_procs(:, :, :) = 0.0d0
+        do k = 1, NZ/2+1
+            do j = 1, NY_procs
+                do i = 1, NX
+                    index = nint(K_abs_procs(i, j, k))
+                    if (k==1 .or. k==NZ/2+1) then
+                        Energy_procs(i, j, index) = Energy_procs(i, j, index) + E_tmp_procs(i, j, k)/2.0d0
+                    else
+                        Energy_procs(i, j, index) = Energy_procs(i, j, index) + E_tmp_procs(i, j, k)/2.0d0*2.0d0
+                    endif
+                enddo
+            enddo
+        enddo
+        Energy_map_procs(:, :, :) = Energy_map_procs(:, :, :) + Energy_procs(:, :, :)
+
+        ! デバッグ用
+        ! ピッタリあってる!!
+        ! kx = sum(U_reg_procs**2) + sum(V_reg_procs**2) + sum(W_reg_procs**2)
+        ! kx = kx/(2*NX*NY*NZ)
+        ! call MPI_Allreduce(kx, ky, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)  ! 変動速度を二乗して足し合わせた値
+        ! kx = sum(Energy_procs)/dble(NX*NY)
+        ! call MPI_Allreduce(kx, kz, 1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)  ! z方向のみにfftした速度場を用いて求めたエネルギーの合計
+        ! if (myrank == 0) write(*, '(a, e12.4)') 'Energy Check = 1?', ky/kz
+
+
+        if (mod(step, Gstep) == 0) then
+            Energy_map_procs(:, :, :) = Energy_map_procs(:, :, :)/(dble(Gstep)/dble(Tstep))  ! 今までに足してきた回数で割る
+
+            ! 空間平均したエネルギーを求める
+            mask_map_procs(:, :) = 1.0d0  ! マスクする場所
+            do j = 1, N_procs
+                do i = 1, NX
+                    if (((i-0.5d0)*dX - 2*PI  /4)**2 + ((myrank*NY_procs + j-0.5d0)*dX - 2*PI  /4)**2 < (DC*1.5d0/2.0d0)**2) mask_map_procs(i, j) = 0.0d0 ! 円柱半径の1.5倍
+                    if (((i-0.5d0)*dX - 2*PI*3/4)**2 + ((myrank*NY_procs + j-0.5d0)*dX - 2*PI  /4)**2 < (DC*1.5d0/2.0d0)**2) mask_map_procs(i, j) = 0.0d0
+                    if (((i-0.5d0)*dX - 2*PI  /4)**2 + ((myrank*NY_procs + j-0.5d0)*dX - 2*PI*3/4)**2 < (DC*1.5d0/2.0d0)**2) mask_map_procs(i, j) = 0.0d0
+                    if (((i-0.5d0)*dX - 2*PI*3/4)**2 + ((myrank*NY_procs + j-0.5d0)*dX - 2*PI*3/4)**2 < (DC*1.5d0/2.0d0)**2) mask_map_procs(i, j) = 0.0d0
+                enddo
+            enddo
+            do k = 0, NZ
+                Energy_tmp(k) = sum(Energy_map_procs(:, :, k)*mask_map_procs(:, :))
+            enddo
+            call MPI_Allreduce(Energy_tmp(0), Energy(0), (NZ+1), MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+            Energy(:) = Energy(:)/sum(mask_map_procs)  ! 足したx,y座標数で割る
+
+            ! データの保存
+            if (myrank == 0) then
+                ! 特定のxyにおけるz方向波数のエネルギー
+                open(40, file = trim(output_dir)//'Log/energy_'//trim(key)//'_z_'//str//'.d', status='replace')
+                do k = 0, NZ-1
+                    write(40, *) k, Energy_map_procs(1, 1, k)
+                enddo
+                close(40)
+                ! 空間平均したエネルギー
+                open(30, file = trim(output_dir)//'Log/energy_'//trim(key)//'_mask_'//str//'.d', status='replace')
+                do k = 0, NZ-1
+                    write(30, *) k, Energy(k)
+                enddo
+                close(30)
+            endif
+
+            Energy_map_procs(:, :, :) = 0.0d0
+        endif
+
+    end subroutine fft_energy_dif_map
+
+    subroutine power_spectrum(U_step_procs, V_step_procs, W_step_procs)
+        real(8), intent(in) :: U_step_procs(1:N_procs, 1:Nstep), V_step_procs(1:N_procs, 1:Nstep), W_step_procs(1:N_procs, 1:Nstep)
+        complex(8) U_hat_procs(1:N_procs, 1:Nstep/2+1), V_hat_procs(1:N_procs, 1:Nstep/2+1), W_hat_procs(1:N_procs, 1:Nstep/2+1)
+        ! real(8) U_debug_procs(1:N_procs, 1:Nstep), V_debug_procs(1:N_procs, 1:Nstep), W_debug_procs(1:N_procs, 1:Nstep)
+        real(8) U_power_sum(1:Nstep/2+1), V_power_sum(1:Nstep/2+1), W_power_sum(1:Nstep/2+1)
+        real(8) U_power_procs(1:Nstep/2+1), V_power_procs(1:Nstep/2+1), W_power_procs(1:Nstep/2+1)
+        integer i, k
+
+        do k = 1, N_procs
+            call fftr2c_1d(U_step_procs(k, :)*U_C, U_hat_procs(k, :))
+            call fftr2c_1d(V_step_procs(k, :)*U_C, V_hat_procs(k, :))
+            call fftr2c_1d(W_step_procs(k, :)*U_C, W_hat_procs(k, :))
+        enddo
+        U_hat_procs(:, :) = U_hat_procs(:, :)/Nstep
+        V_hat_procs(:, :) = V_hat_procs(:, :)/Nstep
+        W_hat_procs(:, :) = W_hat_procs(:, :)/Nstep
+        
+        do i = 1, Nstep/2+1
+            U_power_procs(i) = sum(abs(U_hat_procs(:, i))**2.0d0)/2.0d0
+            V_power_procs(i) = sum(abs(V_hat_procs(:, i))**2.0d0)/2.0d0
+            W_power_procs(i) = sum(abs(W_hat_procs(:, i))**2.0d0)/2.0d0
+        enddo
+        call MPI_Allreduce(U_power_procs(:), U_power_sum(:), Nstep/2+1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        call MPI_Allreduce(V_power_procs(:), V_power_sum(:), Nstep/2+1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+        call MPI_Allreduce(W_power_procs(:), W_power_sum(:), Nstep/2+1, MPI_REAL8, MPI_SUM, MPI_COMM_WORLD, ierr)
+
+
+        if (myrank == 0) then
+            open(50, file = trim(output_dir)//'Log/step_velocity.d', status='replace')
+            do i = 1, Nstep
+                write(50, *) i, i*dt_C, U_step_procs(1, i), V_step_procs(1, i), W_step_procs(1, i)  ! x,yは中心、zは一番下の点の、時系列を保存
+            enddo
+            close(50)
+
+            open(10, file = trim(output_dir)//'Log/Spectrum_x.d', status='replace')
+            do i = 1, Nstep/2+1
+                write(10, *) i-1, U_power_sum(i)  ! x,y中心のz方向に平均したuに対するパワースベクトル
+            enddo
+            close(10)
+
+            open(20, file = trim(output_dir)//'Log/Spectrum_y.d', status='replace')
+            do i = 1, Nstep/2+1
+                write(20, *) i-1, V_power_sum(i)
+            enddo
+            close(20)
+
+            open(30, file = trim(output_dir)//'Log/Spectrum_z.d', status='replace')
+            do i = 1, Nstep/2+1
+                write(30, *) i-1, W_power_sum(i)
+            enddo
+            close(30)
+        endif
+
+        
+        ! デバッグ用
+        ! 正しくFFTできている
+        ! do k = 1, N_procs
+        !     call fftc2r_1d(U_hat_procs(k, :), U_debug_procs(k, :))
+        !     call fftc2r_1d(V_hat_procs(k, :), V_debug_procs(k, :))
+        !     call fftc2r_1d(W_hat_procs(k, :), W_debug_procs(k, :))
+        ! enddo
+        ! if (myrank == 0) write(*, *) 'power_spectrum err =', sum((U_step_procs*U_C - U_debug_procs)**2)/(N_procs*Nstep)
+
+    end subroutine power_spectrum
 
 end module data
 
@@ -2648,26 +2884,28 @@ program main
     real(8), allocatable :: Cpy_procs(:, :, :, :), Cny_procs(:, :, :, :)
     real(8), allocatable :: Cpz_procs(:, :, :, :), Cnz_procs(:, :, :, :)
     real(8), allocatable :: Cx_procs(:, :, :, :)
-    ! ibmのために追加した変数
     real(8), allocatable :: X_procs(:, :, :), Y_procs(:, :, :), Z_procs(:, :, :)
     real(8), allocatable :: Xc_procs(:, :, :), Yc_procs(:, :, :), Zc_procs(:, :, :)
     real(8), allocatable :: Uc_procs(:, :, :), Vc_procs(:, :, :), Wc_procs(:, :, :)
     real(8), allocatable :: Ua_procs(:, :, :), Va_procs(:, :, :), Wa_procs(:, :, :)
     real(8), allocatable :: Fxc_procs(:, :, :), Fyc_procs(:, :, :), Fzc_procs(:, :, :)
     real(8), allocatable :: fxint_procs(:, :, :), fyint_procs(:, :, :), fzint_procs(:, :, :)
-    ! 実験と定量的な評価をするために追加した変数
     real(8), allocatable :: U_ave_procs(:, :, :), V_ave_procs(:, :, :), W_ave_procs(:, :, :)
     real(8), allocatable :: U_rms_procs(:, :, :), V_rms_procs(:, :, :), W_rms_procs(:, :, :)
+    real(8), allocatable :: Energy_map_procs(:, :, :)
+    real(8), allocatable :: U_step_procs(:, :), V_step_procs(:, :), W_step_procs(:, :)
+    real(8) :: Energy(0:NX) = 0.0d0
     integer step
-    real(8) time1, time2
+    real(8) time0, time1, time2, time3, time4, time5, time6, time23, time34, time45
+    time23 = 0.0d0
+    time34 = 0.0d0
+    time45 = 0.0d0
 
     call MPI_Init(ierr)
     call MPI_Comm_Size(MPI_COMM_WORLD, procs, ierr)
     call MPI_Comm_Rank(MPI_COMM_WORLD, myrank, ierr)
 
-    ! write(*, *) 'bbb'
-    ! call MPI_Barrier(MPI_COMM_WORLD)  ! これより前に処理差がつく作業(例えばwrite)をしないとエラーがでる。
-    time1 = MPI_Wtime()   ! 計測開始
+    time0 = MPI_Wtime()
 
     call fft_init
     call init(U_procs, V_procs, W_procs, P_procs, Phi_procs, &
@@ -2679,14 +2917,17 @@ program main
     if (method == 2) then
         call ibm_init(X_procs, Y_procs, Z_procs, Xc_procs, Yc_procs, Zc_procs, Uc_procs, Vc_procs, Wc_procs, &
                       Ua_procs, Va_procs, Wa_procs, Fxc_procs, Fyc_procs, Fzc_procs, fxint_procs, fyint_procs, fzint_procs)
-        call ibm_vtk(Xc_procs, Yc_procs, Zc_procs)
+        if (input_type == 0) call ibm_vtk(Xc_procs, Yc_procs, Zc_procs)
     endif
-    call ave_init(U_ave_procs, V_ave_procs, W_ave_procs, U_rms_procs, V_rms_procs, W_rms_procs)
+    call ave_init(U_ave_procs, V_ave_procs, W_ave_procs, U_rms_procs, V_rms_procs, W_rms_procs, Energy_map_procs, U_step_procs, V_step_procs, W_step_procs)
     if (input_type > 0) call input_binary(U_procs, V_procs, W_procs, P_procs, C_procs, Ax0_procs, Ay0_procs, Az0_procs, Tx0_procs, Ty0_procs, Tz0_procs)
-    if (input_type > 0) call vtk_binary(U_procs, V_procs, W_procs, 0)
-    if (input_type > 0) call scale_vtk(U_procs, V_procs, W_procs, 0)
+    if (input_type > 0 .and. 100*Gstep < Nstep) call vtk_binary(U_procs, V_procs, W_procs, 0)  ! 100個以上出力するなら初期値も出力する
+    if (input_type > 0 .and. 100*Gstep < Nstep) call scale_vtk(U_procs, V_procs, W_procs, 0)
+
+    time1 = MPI_Wtime()
 
     do step = 1, Nstep
+        time2 = MPI_Wtime()
         if (beta == 1.0d0) then
             C_procs(:, :, :, :) = 0.0d0
             Tx_procs(:, :, :) = 0.0d0
@@ -2700,6 +2941,7 @@ program main
             call Lyapunov(Cx_procs, U_procs, V_procs, W_procs, C_procs)
             call polymer_stress(C_procs, Tx_procs, Ty_procs, Tz_procs)
         endif
+        time3 = MPI_Wtime()
         
         call convection(U_procs, V_procs, W_procs, Ax_procs, Ay_procs, Az_procs)
         call viscous(U_procs, V_procs, W_procs, Bx_procs, By_procs, Bz_procs)
@@ -2722,38 +2964,51 @@ program main
             call fft_poisson(Up_procs, Vp_procs, Wp_procs, Phi_procs)
             call fft_march(Up_procs, Vp_procs, Wp_procs, U_procs, V_procs, W_procs, Phi_procs, P_procs)
         endif
+        time4 = MPI_Wtime()
         
         U_ave_procs(:, :, :) = U_ave_procs(:, :, :) + U_procs(1:NX, 1:NY, 1:N_procs)
         V_ave_procs(:, :, :) = V_ave_procs(:, :, :) + V_procs(1:NX, 1:NY, 1:N_procs)
         W_ave_procs(:, :, :) = W_ave_procs(:, :, :) + W_procs(1:NX, 1:NY, 1:N_procs)
 
+        ! x,y中心のz方向の格子点上の、時間に対するu,v,wを保存
+        U_step_procs(:, step) = (U_procs(NX/2, NY/2, 1:N_procs) + U_procs(NX/2-1, NY/2, 1:N_procs))/2.0d0
+        V_step_procs(:, step) = (V_procs(NX/2, NY/2, 1:N_procs) + V_procs(NX/2, NY/2-1, 1:N_procs))/2.0d0
+        W_step_procs(:, step) = (W_procs(NX/2, NY/2, 1:N_procs) + W_procs(NX/2, NY/2, 0:N_procs-1))/2.0d0
 
-        if (mod(step, Tstep) == 0) call all_time(U_procs, V_procs, W_procs, C_procs, step)
-        if (mod(step, Tstep) == 0) call fft_energy(U_procs, V_procs, W_procs, step)
+        if (mod(step, Tstep) == 0) call all_time_dif(U_procs, V_procs, W_procs, U_rms_procs, V_rms_procs, W_rms_procs, C_procs, step)  ! U_rms_procsとかは0.0d0として代入
+        if (mod(step, Tstep) == 0) call all_time_dif_map(U_procs, V_procs, W_procs, U_rms_procs, V_rms_procs, W_rms_procs, C_procs, step)
+        if (mod(step, Tstep) == 0) call fft_energy_dif(U_procs, V_procs, W_procs, U_rms_procs, V_rms_procs, W_rms_procs, Energy, step)
+        if (mod(step, Tstep) == 0) call fft_energy_dif_map(U_procs, V_procs, W_procs, U_rms_procs, V_rms_procs, W_rms_procs, Energy_map_procs, step)
         if (mod(step, Lstep) == 0) call log_progress(U_procs, V_procs, W_procs, C_procs, step, time1)
 
-        if (input_type < 2 .and. mod(step, Gstep)==0) then
-            call get_data_binary(U_procs, V_procs, W_procs, C_procs, 0)  ! 0step目に上書き保存
-            call vtk_binary(U_procs, V_procs, W_procs, 0)
-            call scale_vtk(U_procs, V_procs, W_procs, 0)
-            call output_binary(U_procs, V_procs, W_procs, P_procs, C_procs, Ax_procs, Ay_procs, Az_procs, Tx_procs, Ty_procs, Tz_procs)
-        endif
-
-        if (input_type == 2 .and. mod(step, Gstep)==0) then
+        if (mod(step, Gstep) == 0) then  ! 0step目に上書き保存はやめた
             call get_data_binary(U_procs, V_procs, W_procs, C_procs, step)
             call vtk_binary(U_procs, V_procs, W_procs, step)
             call scale_vtk(U_procs, V_procs, W_procs, step)
         endif
+        if (mod(step, Ostep) == 0) call output_binary(U_procs, V_procs, W_procs, P_procs, C_procs, Ax_procs, Ay_procs, Az_procs, Tx_procs, Ty_procs, Tz_procs)
+        time5 = MPI_Wtime()
+        time23 = time23 + time3-time2
+        time34 = time34 + time4-time3
+        time45 = time45 + time5-time4
     enddo
+
+    call power_spectrum(U_step_procs, V_step_procs, W_step_procs)
 
 
     if (input_type == 2) then
-        call input_binary(U_procs, V_procs, W_procs, P_procs, C_procs, Ax0_procs, Ay0_procs, Az0_procs, Tx0_procs, Ty0_procs, Tz0_procs)
         U_ave_procs(:, :, :) = U_ave_procs(:, :, :)/Nstep
         V_ave_procs(:, :, :) = V_ave_procs(:, :, :)/Nstep
         W_ave_procs(:, :, :) = W_ave_procs(:, :, :)/Nstep
+        call ave_mean(U_ave_procs, V_ave_procs, W_ave_procs)  ! z方向に対して平均
+        ! U_ave_procs(:, :, :) = 0.0d0
+        ! V_ave_procs(:, :, :) = 0.0d0
+        ! W_ave_procs(:, :, :) = 0.0d0
+
+        call input_binary(U_procs, V_procs, W_procs, P_procs, C_procs, Ax0_procs, Ay0_procs, Az0_procs, Tx0_procs, Ty0_procs, Tz0_procs)
 
         do step = 1, Nstep
+            time2 = MPI_Wtime()
             if (beta == 1.0d0) then
                 C_procs(:, :, :, :) = 0.0d0
                 Tx_procs(:, :, :) = 0.0d0
@@ -2767,6 +3022,7 @@ program main
                 call Lyapunov(Cx_procs, U_procs, V_procs, W_procs, C_procs)
                 call polymer_stress(C_procs, Tx_procs, Ty_procs, Tz_procs)
             endif
+            time3 = MPI_Wtime()
 
             call convection(U_procs, V_procs, W_procs, Ax_procs, Ay_procs, Az_procs)
             call viscous(U_procs, V_procs, W_procs, Bx_procs, By_procs, Bz_procs)
@@ -2789,23 +3045,36 @@ program main
                 call fft_poisson(Up_procs, Vp_procs, Wp_procs, Phi_procs)
                 call fft_march(Up_procs, Vp_procs, Wp_procs, U_procs, V_procs, W_procs, Phi_procs, P_procs)
             endif
+            time4 = MPI_Wtime()
 
             U_rms_procs(:, :, :) = U_rms_procs(:, :, :) + (U_procs(1:NX, 1:NY, 1:N_procs) - U_ave_procs(:, :, :))**2
             V_rms_procs(:, :, :) = V_rms_procs(:, :, :) + (V_procs(1:NX, 1:NY, 1:N_procs) - V_ave_procs(:, :, :))**2
             W_rms_procs(:, :, :) = W_rms_procs(:, :, :) + (W_procs(1:NX, 1:NY, 1:N_procs) - W_ave_procs(:, :, :))**2
 
             if (mod(step, Tstep) == 0) call all_time_dif(U_procs, V_procs, W_procs, U_ave_procs, V_ave_procs, W_ave_procs, C_procs, step)
-            if (mod(step, Tstep) == 0) call fft_energy_dif(U_procs, V_procs, W_procs, U_ave_procs, V_ave_procs, W_ave_procs, step)
+            if (mod(step, Tstep) == 0) call all_time_dif_map(U_procs, V_procs, W_procs, U_ave_procs, V_ave_procs, W_ave_procs, C_procs, step)
+            if (mod(step, Tstep) == 0) call fft_energy_dif(U_procs, V_procs, W_procs, U_ave_procs, V_ave_procs, W_ave_procs, Energy, step)
+            if (mod(step, Tstep) == 0) call fft_energy_dif_map(U_procs, V_procs, W_procs, U_ave_procs, V_ave_procs, W_ave_procs, Energy_map_procs, step)
             if (mod(step, Lstep) == 0) call log_progress(U_procs, V_procs, W_procs, C_procs, step + Nstep, time1)
+            time5 = MPI_Wtime()
+            time23 = time23 + time3-time2
+            time34 = time34 + time4-time3
+            time45 = time45 + time5-time4
         enddo
 
-        call ibm_var(U_rms_procs, V_rms_procs, W_rms_procs)
-        call output_binary(U_procs, V_procs, W_procs, P_procs, C_procs, Ax_procs, Ay_procs, Az_procs, Tx_procs, Ty_procs, Tz_procs)
+        ! call ibm_var(U_rms_procs, V_rms_procs, W_rms_procs)  ! 今はいらない
+        ! call output_binary(U_procs, V_procs, W_procs, P_procs, C_procs, Ax_procs, Ay_procs, Az_procs, Tx_procs, Ty_procs, Tz_procs)  ! 1周目で保存
     endif
 
     ! call MPI_Barrier(MPI_COMM_WORLD)
-    time2 = MPI_Wtime()  ! 計測終了
-    if (myrank == 0) write(*, *) 'time:', time2 - time1
+    time6 = MPI_Wtime()  ! 計測終了
+    if (myrank == 0) then
+        write(*, '(a9, F10.3, a3)') 'Total   :', (time6-time0), '[s]'
+        write(*, '(a9, F10.3, a3, F8.3, a3)') 'init    :', time1-time0, '[s]', (time1-time0)/(time6-time0)*100, '[%]'
+        write(*, '(a9, F10.3, a3, F8.3, a3)') 'polymer :', time23, '[s]', time23/(time6-time0)*100, '[%]'
+        write(*, '(a9, F10.3, a3, F8.3, a3)') 'newton  :', time34, '[s]', time34/(time6-time0)*100, '[%]'
+        write(*, '(a9, F10.3, a3, F8.3, a3)') 'output  :', time45, '[s]', time45/(time6-time0)*100, '[%]'
+    endif
 
     call fft_finalize
     call MPI_Finalize(ierr)  ! 終わり
